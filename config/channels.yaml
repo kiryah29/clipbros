@@ -1,0 +1,23 @@
+# Live channels to monitor. Only add streamers who allow clipping/reposting.
+channels:
+  - name: demo_streamer
+    platform: simulated       # simulated | twitch | youtube | kick
+    enabled: true
+    # facecam crop in the SOURCE frame (x, y, w, h as fractions of width/height)
+    facecam: {x: 0.72, y: 0.70, w: 0.27, h: 0.28}
+    schedule: []              # empty = always monitor while running
+
+  - name: some_twitch_channel
+    platform: twitch
+    enabled: false
+    facecam: {x: 0.0, y: 0.0, w: 0.25, h: 0.25}
+    detector: {z_threshold: 3.5}   # per-channel override example
+    schedule:                 # smart scheduling: monitor only in these windows (local time)
+      - {days: [mon, wed, fri], start: "19:00", end: "23:30"}
+
+  - name: "@some_youtube_handle"
+    platform: youtube
+    enabled: false
+    video_id: ""              # optional: the live video id; otherwise resolved from the handle
+    facecam: {x: 0.0, y: 0.72, w: 0.25, h: 0.27}
+    schedule: []

@@ -1,0 +1,158 @@
+"""Chat-velocity spike detector.
+
+Counts messages per bucket, smooths them, and keeps an exponentially weighted
+baseline (mean + variance) of each channel's normal pace. A spike fires when
+the smoothed rate is both `z_threshold` std-devs above the baseline and
+`min_ratio` times the baseline. The baseline is frozen while a spike is open
+so the hype doesn't teach the detector that hype is normal.
+"""
+from __future__ import annotations
+
+import math
+import re
+from collections import Counter, deque
+from typing import Callable, Iterable
+
+from .models import ChatMessage, Spike
+
+TOKEN_RE = re.compile(r"\S+")
+
+
+class SpikeDetector:
+    def __init__(self, channel: str, cfg: dict, hype_tokens: Iterable[str] = (),
+                 on_spike: Callable[[Spike], None] | None = None):
+        d = cfg
+        self.channel = channel
+        self.bucket = float(d["bucket_seconds"])
+        self.alpha = 1 - 0.5 ** (self.bucket / float(d["baseline_halflife_s"]))
+        self.warmup = float(d["warmup_s"])
+        self.z_th = float(d["z_threshold"])
+        self.ratio_th = float(d["min_ratio"])
+        self.min_rate = float(d["min_msgs_per_s"])
+        self.cooldown = float(d["cooldown_s"])
+        self.smooth_n = int(d.get("smoothing_buckets", 1))
+        self.sustain_n = max(1, round(float(d.get("min_sustain_s", 3)) / self.bucket))
+        self.hype = {t.lower() for t in hype_tokens}
+        self.on_spike = on_spike
+
+        self.mean: float | None = None
+        self.var = 0.0
+        self.t0: float | None = None
+        self.cur_bucket: int | None = None
+        self.cur_count = 0
+        self.cur_msgs: list[str] = []
+        self.recent = deque(maxlen=self.smooth_n)
+        self.history = deque(maxlen=int(120 / self.bucket))   # (ts, rate) for receipts
+        self.open: dict | None = None
+        self.candidate: dict | None = None
+        self.last_end = -math.inf
+        self.spikes: list[Spike] = []
+
+    # -- feeding -----------------------------------------------------------
+    def feed(self, msg: ChatMessage) -> list[Spike]:
+        """Add a message. Returns spikes that closed as a result (usually none)."""
+        b = int(msg.ts // self.bucket)
+        fired = self._advance_to(b)
+        self.cur_count += 1
+        self.cur_msgs.append(msg.text)
+        return fired
+
+    def tick(self, now: float) -> list[Spike]:
+        """Call periodically so silence also closes buckets."""
+        return self._advance_to(int(now // self.bucket))
+
+    def _advance_to(self, b: int) -> list[Spike]:
+        fired: list[Spike] = []
+        if self.cur_bucket is None:
+            self.cur_bucket = b
+            self.t0 = b * self.bucket
+            return fired
+        while self.cur_bucket < b:
+            s = self._close_bucket(self.cur_bucket, self.cur_count, self.cur_msgs)
+            if s:
+                fired.append(s)
+            self.cur_bucket += 1
+            self.cur_count, self.cur_msgs = 0, []
+        return fired
+
+    # -- core --------------------------------------------------------------
+    def _close_bucket(self, b: int, count: int, msgs: list[str]) -> Spike | None:
+        ts = b * self.bucket
+        rate = count / self.bucket
+        self.recent.append(rate)
+        smooth = sum(self.recent) / len(self.recent)
+        self.history.append((ts, smooth))
+
+        if self.mean is None:
+            self.mean = smooth
+            self.var = max(smooth, 1.0) / (self.bucket * self.smooth_n)  # Poisson guess
+            return None
+
+        # chat is bursty count data: never trust a std below the Poisson noise floor
+        poisson_std = math.sqrt(max(self.mean, 0.5) / (self.bucket * self.smooth_n))
+        std = max(math.sqrt(max(self.var, 0.0)), poisson_std)
+        z = (smooth - self.mean) / std
+        ratio = smooth / max(self.mean, 0.1)
+        warm = ts - self.t0 >= self.warmup
+        hot = warm and z >= self.z_th and ratio >= self.ratio_th and smooth >= self.min_rate
+
+        if self.open is not None:
+            o = self.open
+            o["msgs"].extend(msgs)
+            if smooth > o["peak_rate"]:
+                o.update(peak_rate=smooth, peak_ts=ts, z=z, ratio=ratio)
+            # close when the rate drops back under half the way to threshold
+            if not (z >= self.z_th / 2 and smooth >= self.min_rate):
+                return self._close_spike(ts)
+            return None
+
+        if hot and ts - self.last_end >= self.cooldown:
+            c = self.candidate
+            if c is None:
+                c = self.candidate = dict(start_ts=ts, peak_ts=ts, peak_rate=smooth, z=z,
+                                          ratio=ratio, base=self.mean, std=std, msgs=[], n=0)
+            c["n"] += 1
+            c["msgs"].extend(msgs)
+            if smooth > c["peak_rate"]:
+                c.update(peak_rate=smooth, peak_ts=ts, z=z, ratio=ratio)
+            if c["n"] >= self.sustain_n:   # must stay hot a few seconds, not a one-off blip
+                self.open, self.candidate = c, None
+            return None
+        self.candidate = None
+
+        # only learn the baseline from non-spike buckets; early on use a plain running
+        # average (alpha = 1/n) so one odd first bucket can't skew the baseline for minutes
+        self.n_learned = getattr(self, "n_learned", 1) + 1
+        a = max(self.alpha, 1.0 / self.n_learned)
+        diff = smooth - self.mean
+        self.mean += a * diff
+        self.var = (1 - a) * (self.var + a * diff * diff)
+        return None
+
+    def _close_spike(self, end_ts: float) -> Spike:
+        o, self.open = self.open, None
+        self.last_end = end_ts
+        tokens = Counter(t for m in o["msgs"] for t in TOKEN_RE.findall(m))
+        hype_hits = sum(1 for m in o["msgs"]
+                        if any(t.lower() in self.hype for t in TOKEN_RE.findall(m)))
+        curve = [r for (t, r) in self.history if o["start_ts"] - 30 <= t <= end_ts]
+        spike = Spike(
+            channel=self.channel, start_ts=o["start_ts"], peak_ts=o["peak_ts"], end_ts=end_ts,
+            peak_rate=round(o["peak_rate"], 2), baseline_rate=round(o["base"], 2),
+            baseline_std=round(o["std"], 2), z_score=round(o["z"], 2), ratio=round(o["ratio"], 2),
+            hype_share=round(hype_hits / max(len(o["msgs"]), 1), 3),
+            top_tokens=tokens.most_common(8), sample_messages=o["msgs"][:10],
+            rate_curve=[round(r, 2) for r in curve],
+        )
+        self.spikes.append(spike)
+        if self.on_spike:
+            self.on_spike(spike)
+        return spike
+
+
+def score_spike(spike: Spike, ranking: dict) -> float:
+    return round(
+        ranking["w_z"] * spike.z_score
+        + ranking["w_ratio"] * spike.ratio
+        + ranking["w_peak"] * spike.peak_rate
+        + ranking["w_hype"] * spike.hype_share, 3)
