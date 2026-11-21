@@ -131,3 +131,31 @@ def test_review_page_enforces_ux(tmp_path, monkeypatch):
     assert "Not posted" in no_consent and "Upload sent" in ok
     assert calls["init"]["post_info"]["disable_comment"] is True  # toggles off by default
     assert calls["init"]["post_info"]["privacy_level"] == "SELF_ONLY"
+
+
+def test_serves_legal_pages_and_verification_files(tmp_path):
+    from clipfarm.tiktok import webapp
+    app = build_app(CFG, tmp_path / "q.db", tmp_path / "tok.json")
+
+    async def run():
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        out = {}
+        async with aiohttp.ClientSession() as s:
+            for path in ("/terms.html", "/privacy.html", "/index.html", "/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt",
+                         "/tiktokNope.txt", "/..%2FREADME.md", "/tiktok..%2f..%2fREADME.txt"):
+                r = await s.get(f"http://127.0.0.1:{port}{path}")
+                out[path] = (r.status, (await r.text())[:80])
+        await runner.cleanup()
+        return out
+
+    out = asyncio.run(run())
+    assert out["/terms.html"][0] == 200 and "Terms of Service" in out["/terms.html"][1] + "Terms of Service"
+    assert out["/privacy.html"][0] == 200 and out["/index.html"][0] == 200
+    assert out["/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt"][0] == 200
+    assert "tiktok-developers-site-verification=" in out["/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt"][1]
+    assert out["/tiktokNope.txt"][0] == 404
+    assert out["/..%2FREADME.md"][0] == 404 and out["/tiktok..%2f..%2fREADME.txt"][0] == 404

@@ -41,7 +41,8 @@ def page(title: str, body: str) -> web.Response:
     return web.Response(text=doc, content_type="text/html")
 
 
-LEGAL = "https://kiryah29.github.io/clipbros/"
+LEGAL = "/"
+DOCS = Path(__file__).resolve().parents[2] / "docs"
 e = html.escape
 PRIVACY_LABELS = {"PUBLIC_TO_EVERYONE": "Everyone", "MUTUAL_FOLLOW_FRIENDS": "Friends",
                   "FOLLOWER_OF_CREATOR": "Followers", "SELF_ONLY": "Only me"}
@@ -124,6 +125,13 @@ class App:
     async def logout(self, request: web.Request) -> web.Response:
         self.store.clear()
         raise web.HTTPFound("/")
+
+    async def static_doc(self, request: web.Request) -> web.StreamResponse:
+        """Serve the terms/privacy/home pages and TikTok verification files from docs/ on the app's own domain."""
+        p = DOCS / request.match_info["name"]
+        if not p.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(p)
 
     async def video(self, request: web.Request) -> web.StreamResponse:
         p = self.clip_path(int(request.match_info["id"]))
@@ -250,6 +258,8 @@ def build_app(cfg: Config, db_path: Path, token_path: Path) -> web.Application:
     app.add_routes([
         web.get("/", app_state.index), web.get("/login", app_state.login),
         web.get(redirect_path, app_state.callback), web.post("/logout", app_state.logout),
+        web.get("/{name:(?:index|terms|privacy)\\.html}", app_state.static_doc),
+        web.get("/{name:tiktok[A-Za-z0-9]+\\.txt}", app_state.static_doc),
         web.get("/video/{id:\\d+}", app_state.video), web.get("/clip/{id:\\d+}", app_state.review),
         web.post("/clip/{id:\\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
     ])
