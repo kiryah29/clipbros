@@ -110,3 +110,24 @@ clipfarm/engine.py       wires it together (demo + live)
 * Backdrop footage and music must be yours or properly licensed. Gameplay from other
   games, popular songs and "satisfying" videos are common reasons for takedowns and strikes.
 * Follow each platform's rules on reuploaded and unoriginal content.
+
+## Post to TikTok (official Content Posting API)
+
+`python -m clipfarm tiktok-app` starts a small web app: connect your TikTok account
+(Login Kit), pick a rendered clip, set caption and privacy, tick the consent box and post.
+It uses the official API with `FILE_UPLOAD`, so no public video URL is needed.
+
+1. In developers.tiktok.com add **Login Kit** (`user.info.basic`) and **Content Posting API**
+   (`video.publish`) to your app and add your own TikTok account as a sandbox target user.
+2. TikTok needs an **HTTPS redirect URI** registered on the app. Run a tunnel
+   (e.g. `cloudflared tunnel --url http://localhost:8000`) and register
+   `https://<tunnel-host>/callback`.
+3. Put `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and `TIKTOK_REDIRECT_URI` in `.env`
+   (see `.env.example`).
+4. `pip install -r requirements.txt`, run `python -m clipfarm demo` to get a reel, then
+   `python -m clipfarm tiktok-app` and open the tunnel URL in a browser.
+
+Until TikTok audits the app, posts can only be **Only me** (private). The review screen
+follows TikTok's UX rules: account shown, no default privacy choice, interaction toggles
+off, commercial-content disclosure, consent declaration, and an explicit Post click.
+The token is stored in `data/tiktok_token.json` (gitignored).

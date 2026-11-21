@@ -1,0 +1,256 @@
+"""Small review-and-post web app: connect TikTok, review a clip, post it to your own account.
+
+Follows TikTok's Content Posting API UX rules: show the creator's account, no default
+privacy choice, interaction toggles off by default, commercial-content disclosure, the
+consent declaration, and an explicit Post click for every video.
+"""
+from __future__ import annotations
+
+import html
+import json
+import secrets
+from urllib.parse import urlparse
+from pathlib import Path
+
+import aiohttp
+from aiohttp import web
+
+from ..queue import ClipQueue
+from .api import Config, TikTokClient, TikTokError, Token, TokenStore, authorize_url
+
+CSS = """
+:root{color-scheme:light dark;--bg:#fff;--fg:#161616;--mut:#666;--line:#ddd;--acc:#fe2c55;--card:#f6f6f6}
+@media(prefers-color-scheme:dark){:root{--bg:#121212;--fg:#f1f1f1;--mut:#aaa;--line:#333;--acc:#fe2c55;--card:#1c1c1c}}
+body{font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:1.4rem}a{color:var(--acc)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.mut{color:var(--mut);font-size:.9rem}
+button,.btn{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:1rem;cursor:pointer;text-decoration:none;display:inline-block}
+button[disabled]{opacity:.45;cursor:not-allowed}.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
+video{width:100%;max-height:420px;border-radius:8px;background:#000}img.av{width:44px;height:44px;border-radius:50%}
+label.opt{display:block;margin:6px 0}.err{color:#d33}.ok{color:#1a8f3c}
+"""
+
+
+def page(title: str, body: str) -> web.Response:
+    doc = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+           f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{html.escape(title)}</title>"
+           f"<style>{CSS}</style></head><body><h1>Clip bros app</h1>{body}"
+           f"<p class='mut'><a href='/'>Clips</a> &middot; <a href='{LEGAL}terms.html'>Terms</a> &middot; "
+           f"<a href='{LEGAL}privacy.html'>Privacy</a></p></body></html>")
+    return web.Response(text=doc, content_type="text/html")
+
+
+LEGAL = "https://kiryah29.github.io/clipbros/"
+e = html.escape
+PRIVACY_LABELS = {"PUBLIC_TO_EVERYONE": "Everyone", "MUTUAL_FOLLOW_FRIENDS": "Friends",
+                  "FOLLOWER_OF_CREATOR": "Followers", "SELF_ONLY": "Only me"}
+
+
+class App:
+    def __init__(self, cfg: Config, queue: ClipQueue, store: TokenStore):
+        self.cfg, self.queue, self.store = cfg, queue, store
+        self.states: set[str] = set()
+        self.http: aiohttp.ClientSession | None = None
+
+    # -- helpers --------------------------------------------------------------------
+    def client(self) -> TikTokClient:
+        return TikTokClient(self.cfg, self.http)
+
+    async def token(self) -> Token | None:
+        t = self.store.load()
+        if t and t.expired and t.refresh_token:
+            try:
+                t = await self.client().refresh(t)
+                self.store.save(t)
+            except TikTokError:
+                self.store.clear()
+                return None
+        return t
+
+    def clip_path(self, clip_id: int) -> Path | None:
+        c = self.queue.get(clip_id)
+        p = Path(c.reel_path) if c and c.reel_path else None
+        return p if p and p.is_file() else None
+
+    # -- pages ----------------------------------------------------------------------
+    async def index(self, request: web.Request) -> web.Response:
+        tok = await self.token()
+        if tok:
+            try:
+                u = await self.client().user_info(tok)
+            except TikTokError as ex:
+                u = {}
+                note = f"<p class='err'>{e(str(ex))}</p>"
+            else:
+                note = ""
+            acct = (f"<div class='card row'><img class='av' src='{e(u.get('avatar_url', ''))}' alt=''>"
+                    f"<div><b>{e(u.get('display_name', 'Connected account'))}</b><br>"
+                    f"<span class='mut'>TikTok account connected</span></div>"
+                    f"<form method='post' action='/logout' style='margin-left:auto'><button class='ghost'>Disconnect</button></form></div>{note}")
+        else:
+            acct = ("<div class='card'><p>Connect your TikTok account to post your clips.</p>"
+                    "<a class='btn' href='/login'>Connect TikTok</a></div>")
+        clips = [c for c in self.queue.ranked(None, 50) if c.reel_path and Path(c.reel_path).is_file()]
+        if clips:
+            items = "".join(
+                f"<div class='card row'><div><b>Clip #{c.id}</b> &middot; {e(c.channel)}<br>"
+                f"<span class='mut'>score {c.score:.2f} &middot; {e(str(c.receipt.get('why', '')))}</span></div>"
+                f"<a class='btn' style='margin-left:auto' href='/clip/{c.id}'>Review</a></div>" for c in clips)
+        else:
+            items = "<p class='mut'>No rendered clips yet. Run <code>python -m clipfarm demo</code> first.</p>"
+        return page("Clips", acct + "<h2>Your clips</h2>" + items)
+
+    async def login(self, request: web.Request) -> web.Response:
+        state = secrets.token_urlsafe(16)
+        self.states.add(state)
+        raise web.HTTPFound(authorize_url(self.cfg, state))
+
+    async def callback(self, request: web.Request) -> web.Response:
+        q = request.query
+        if q.get("error"):
+            return page("Login cancelled", f"<p class='err'>TikTok login was not completed: {e(q.get('error_description') or q['error'])}</p>")
+        state = q.get("state", "")
+        if state not in self.states:
+            return page("Login failed", "<p class='err'>Invalid login state. Please start again from the home page.</p>")
+        self.states.discard(state)
+        try:
+            tok = await self.client().exchange_code(q["code"])
+        except (TikTokError, KeyError) as ex:
+            return page("Login failed", f"<p class='err'>{e(str(ex))}</p>")
+        self.store.save(tok)
+        raise web.HTTPFound("/")
+
+    async def logout(self, request: web.Request) -> web.Response:
+        self.store.clear()
+        raise web.HTTPFound("/")
+
+    async def video(self, request: web.Request) -> web.StreamResponse:
+        p = self.clip_path(int(request.match_info["id"]))
+        if not p:
+            raise web.HTTPNotFound()
+        return web.FileResponse(p)
+
+    async def review(self, request: web.Request) -> web.Response:
+        cid = int(request.match_info["id"])
+        c = self.queue.get(cid)
+        if not c or not self.clip_path(cid):
+            raise web.HTTPNotFound()
+        tok = await self.token()
+        if not tok:
+            raise web.HTTPFound("/login")
+        try:
+            info = await self.client().creator_info(tok)
+        except TikTokError as ex:
+            return page("Review", f"<p class='err'>Could not load your TikTok posting options: {e(str(ex))}</p>")
+        opts = info.get("privacy_level_options", [])
+        options = "<option value='' selected disabled>Select who can view this video</option>" + "".join(
+            f"<option value='{e(o)}'>{e(PRIVACY_LABELS.get(o, o))}</option>" for o in opts)
+        dis = {k: info.get(f"{k}_disabled", False) for k in ("comment", "duet", "stitch")}
+        toggles = "".join(
+            f"<label class='opt'><input type='checkbox' name='allow_{k}' {'disabled' if dis[k] else ''}> Allow {k}s"
+            f"{' (turned off in your TikTok settings)' if dis[k] else ''}</label>" for k in ("comment", "duet", "stitch"))
+        body = f"""
+<div class='card row'><div>Posting as <b>@{e(info.get('creator_username', ''))}</b>
+ ({e(info.get('creator_nickname', ''))})</div></div>
+<video controls playsinline src='/video/{cid}'></video>
+<form id='f' class='card' method='post' action='/clip/{cid}/post'>
+ <label>Caption<textarea name='title' rows='3' maxlength='2200'>{e(str(c.receipt.get('why', '')))}</textarea></label>
+ <label>Who can view this video<select name='privacy' id='privacy' required>{options}</select></label>
+ <p class='mut' style='margin:6px 0 0'>Unaudited apps can only post as "Only me" until TikTok approves the app.</p>
+ <div style='margin-top:10px'><b>Allow users to</b>{toggles}</div>
+ <div style='margin-top:10px'><label class='opt'><input type='checkbox' id='disclose' name='disclose'> <b>Disclose commercial content</b></label>
+  <div id='brand' hidden style='margin-left:24px'>
+   <label class='opt'><input type='checkbox' name='your_brand'> Your brand (promoting yourself or your business)</label>
+   <label class='opt'><input type='checkbox' name='branded'> Branded content (promoting a third party)</label>
+   <p class='mut' id='bnote'></p></div></div>
+ <p class='mut' id='declare'>By posting, you agree to TikTok's <a href='https://www.tiktok.com/legal/page/global/music-usage-confirmation/en' target='_blank' rel='noopener'>Music Usage Confirmation</a>.</p>
+ <label class='opt'><input type='checkbox' id='consent' required> I have reviewed this video and agree to post it to my TikTok account.</label>
+ <button id='go' disabled>Post to TikTok</button></form>
+<script>
+const f=document.getElementById('f'),go=document.getElementById('go');
+function sync(){{const d=document.getElementById('disclose').checked,b=document.getElementById('brand');b.hidden=!d;
+ const p=document.getElementById('privacy').value,br=f.branded.checked,yb=f.your_brand.checked;
+ const sel=(!d)||br||yb;let note='';
+ if(d&&br&&p==='SELF_ONLY'){{note='Branded content visibility cannot be set to private.';}}
+ else if(d&&!yb&&!br){{note='Select at least one option to disclose.';}}
+ else if(d&&br){{note="Your video will be labeled 'Paid partnership'.";}} else if(d&&yb){{note="Your video will be labeled 'Promotional content'.";}}
+ document.getElementById('bnote').textContent=note;
+ go.disabled=!(p&&document.getElementById('consent').checked&&sel&&!(d&&br&&p==='SELF_ONLY'));}}
+f.addEventListener('input',sync);f.addEventListener('change',sync);sync();
+</script>"""
+        return page(f"Review clip {cid}", body)
+
+    async def post(self, request: web.Request) -> web.Response:
+        cid = int(request.match_info["id"])
+        p = self.clip_path(cid)
+        if not p:
+            raise web.HTTPNotFound()
+        tok = await self.token()
+        if not tok:
+            raise web.HTTPFound("/login")
+        form = await request.post()
+        privacy = form.get("privacy", "")
+        disclose = "disclose" in form
+        yb, br = "your_brand" in form, "branded" in form
+        if not privacy or "consent" not in form:
+            return page("Not posted", "<p class='err'>Choose who can view the video and confirm the consent box.</p>")
+        if disclose and not (yb or br):
+            return page("Not posted", "<p class='err'>Select a commercial-content option or turn the disclosure off.</p>")
+        if disclose and br and privacy == "SELF_ONLY":
+            return page("Not posted", "<p class='err'>Branded content cannot be private.</p>")
+        post_info = {
+            "title": str(form.get("title", ""))[:2200],
+            "privacy_level": privacy,
+            "disable_comment": "allow_comment" not in form,
+            "disable_duet": "allow_duet" not in form,
+            "disable_stitch": "allow_stitch" not in form,
+            "video_cover_timestamp_ms": 1000,
+        }
+        if disclose:
+            post_info["brand_content_toggle"] = br
+            post_info["brand_organic_toggle"] = yb
+        try:
+            pid = await self.client().publish_video(tok, p, post_info)
+        except TikTokError as ex:
+            return page("Not posted", f"<p class='err'>{e(str(ex))}</p><a href='/clip/{cid}'>Back</a>")
+        self.queue.update(cid, status="approved")
+        body = f"""<div class='card'><p>Upload sent to TikTok. Checking status&hellip;</p><p id='s' class='mut'>PROCESSING</p></div>
+<script>
+async function poll(){{const r=await fetch('/status/{e(pid)}');const j=await r.json();
+ document.getElementById('s').textContent=j.status||j.error||'unknown';
+ if(!['PUBLISH_COMPLETE','FAILED'].includes(j.status)&&!j.error)setTimeout(poll,3000);}}poll();
+</script>"""
+        return page("Posting", body)
+
+    async def status(self, request: web.Request) -> web.Response:
+        tok = await self.token()
+        if not tok:
+            return web.json_response({"error": "not connected"}, status=401)
+        try:
+            data = await self.client().publish_status(tok, request.match_info["pid"])
+        except TikTokError as ex:
+            return web.json_response({"error": str(ex)})
+        return web.json_response({"status": data.get("status"), "reason": data.get("fail_reason")})
+
+
+def build_app(cfg: Config, db_path: Path, token_path: Path) -> web.Application:
+    app_state = App(cfg, ClipQueue(db_path), TokenStore(token_path))
+    app = web.Application()
+
+    async def on_start(_: web.Application) -> None:
+        app_state.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600))
+
+    async def on_stop(_: web.Application) -> None:
+        await app_state.http.close()
+
+    app.on_startup.append(on_start)
+    app.on_cleanup.append(on_stop)
+    redirect_path = urlparse(cfg.redirect_uri).path or "/callback"
+    app.add_routes([
+        web.get("/", app_state.index), web.get("/login", app_state.login),
+        web.get(redirect_path, app_state.callback), web.post("/logout", app_state.logout),
+        web.get("/video/{id:\\d+}", app_state.video), web.get("/clip/{id:\\d+}", app_state.review),
+        web.post("/clip/{id:\\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
+    ])
+    return app

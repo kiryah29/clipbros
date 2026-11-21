@@ -70,6 +70,10 @@ def main(argv: list[str] | None = None) -> None:
         sp = sub.add_parser(name, help=f"mark a clip {name}d")
         sp.add_argument("id", type=int)
 
+    tp = sub.add_parser("tiktok-app", help="web app: connect TikTok, review a clip, post it (Content Posting API)")
+    tp.add_argument("--host", default="127.0.0.1")
+    tp.add_argument("--port", type=int, default=8000)
+
     a = p.parse_args(argv)
     settings = load_settings(a.settings)
     channels = load_channels(a.channels)
@@ -94,6 +98,16 @@ def main(argv: list[str] | None = None) -> None:
             asyncio.run(watch_chat(settings, {"name": a.channel, "platform": a.platform}))
         except KeyboardInterrupt:
             pass
+    elif a.cmd == "tiktok-app":
+        from aiohttp import web
+        from .tiktok.api import Config as TTConfig, TikTokError
+        from .tiktok.webapp import build_app
+        try:
+            cfg = TTConfig.from_env()
+        except TikTokError as ex:
+            sys.exit(f"TikTok app not configured: {ex} (see README, 'Post to TikTok')")
+        web.run_app(build_app(cfg, data_dir / "queue.db", data_dir / "tiktok_token.json"),
+                    host=a.host, port=a.port)
     elif a.cmd == "queue":
         _print_queue(q(), a.status, a.limit)
     elif a.cmd == "receipt":
