@@ -1,0 +1,44 @@
+# Global settings. Per-channel overrides live in channels.yaml.
+data_dir: ./data            # clips, reels and the queue database go here
+
+detector:
+  bucket_seconds: 1.0       # chat velocity is measured in messages per bucket
+  baseline_halflife_s: 300  # how fast the "normal pace" adapts (EWMA half-life)
+  warmup_s: 90              # learn the baseline this long before firing
+  z_threshold: 3.0          # spike must be this many std-devs above normal...
+  min_ratio: 2.5            # ...AND this many times the normal rate
+  min_msgs_per_s: 2.0       # ignore spikes on near-silent chats
+  cooldown_s: 45            # no new spike within this window after one ends
+  smoothing_buckets: 3      # rolling mean over N buckets to kill single-bucket noise
+  min_sustain_s: 3          # rate must stay hot this long before a spike opens
+
+clip:
+  pre_roll_s: 20            # chat reacts AFTER the moment, so look back
+  post_roll_s: 8
+  max_length_s: 60
+  buffer_minutes: 5         # rolling video buffer kept on disk per channel
+  quality: "1080p60,1080p,best"
+
+ranking:
+  # score = w_z * z + w_ratio * ratio + w_peak * peak_rate + w_hype * hype_share
+  w_z: 1.0
+  w_ratio: 0.5
+  w_peak: 0.2
+  w_hype: 3.0
+  hype_tokens: ["LUL", "KEKW", "OMEGALUL", "POG", "POGGERS", "W", "CLIP", "LMAO", "😂", "💀", "🔥"]
+
+reel:
+  width: 1080
+  height: 1920
+  layout: facecam_top       # facecam_top | gameplay_only
+  facecam_band_ratio: 0.30  # share of height given to the facecam band
+  gameplay_band_ratio: 0.45 # rest goes to backdrop (or gameplay grows if no backdrop)
+  backdrop: null            # e.g. assets/backdrops/parkour.mp4 (must be footage you own/licensed)
+  music: null               # e.g. assets/music/track.mp3 (licensed!)
+  music_volume: 0.12
+  caption_style: pop        # pop | boxed | clean
+  hook_text: "WAIT FOR IT..."
+  hook_seconds: 2.5
+  cta_text: "Follow for more clips"
+  cta_seconds: 2.5
+  transcriber: none         # none | faster_whisper
