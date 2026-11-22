@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import secrets
 from urllib.parse import urlparse
 from pathlib import Path
@@ -44,6 +45,15 @@ def page(title: str, body: str) -> web.Response:
 LEGAL = "/"
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 e = html.escape
+DEFAULT_CAPTION = "Clip from {channel} #fyp #streamer #clips"
+
+
+def default_caption(channel: str) -> str:
+    """Caption prefilled on the review screen. Override with TIKTOK_DEFAULT_CAPTION ({channel} is replaced)."""
+    template = os.getenv("TIKTOK_DEFAULT_CAPTION") or DEFAULT_CAPTION
+    return template.replace("{channel}", channel)[:2200]
+
+
 FRIENDLY_ERRORS = {
     "unaudited_client_can_only_post_to_private_accounts":
         "TikTok only lets an app that has not been audited post to a PRIVATE TikTok account. Set your TikTok account "
@@ -185,7 +195,7 @@ class App:
  ({e(info.get('creator_nickname', ''))})</div></div>
 <video controls playsinline src='/video/{cid}'></video>
 <form id='f' class='card' method='post' action='/clip/{cid}/post'>
- <label>Caption<textarea name='title' rows='3' maxlength='2200'>{e(str(c.receipt.get('why', '')))}</textarea></label>
+ <label>Caption<textarea name='title' rows='3' maxlength='2200'>{e(default_caption(c.channel))}</textarea></label>
  <label>Who can view this video<select name='privacy' id='privacy' required>{options}</select></label>
  <p class='mut' style='margin:6px 0 0'>Unaudited apps can only post as "Only me" until TikTok approves the app.</p>
  <div style='margin-top:10px'><b>Allow users to</b>{toggles}</div>

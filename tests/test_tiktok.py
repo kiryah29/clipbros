@@ -127,6 +127,7 @@ def test_review_page_enforces_ux(tmp_path, monkeypatch):
 
     review, no_consent, ok = asyncio.run(run())
     assert "name='consent'" in review  # the checkbox must be submitted with the form
+    assert "Clip from ch #fyp" in review
     assert "@bob" in review and "selected disabled" in review  # no default privacy
     assert "Music Usage Confirmation" in review and "turned off in your TikTok settings" in review
     assert "Not posted" in no_consent and "Upload sent" in ok
@@ -167,3 +168,11 @@ def test_friendly_error_for_unaudited_private_rule():
     msg = friendly(api.TikTokError("unaudited_client_can_only_post_to_private_accounts: blocked"))
     assert "PRIVATE TikTok account" in msg and "Private account" in msg
     assert friendly(api.TikTokError("some_other: <b>x</b>")) == "some_other: &lt;b&gt;x&lt;/b&gt;"
+
+
+def test_default_caption(monkeypatch):
+    from clipfarm.tiktok.webapp import default_caption
+    monkeypatch.delenv("TIKTOK_DEFAULT_CAPTION", raising=False)
+    assert default_caption("xqc") == "Clip from xqc #fyp #streamer #clips"
+    monkeypatch.setenv("TIKTOK_DEFAULT_CAPTION", "{channel} highlights #twitch")
+    assert default_caption("xqc") == "xqc highlights #twitch"
