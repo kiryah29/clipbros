@@ -299,20 +299,22 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
 
     async def on_stop(_: web.Application) -> None:
         await app_state.http.close()
+        for rid in list(runs.procs):   # don't leave test runs behind when the app stops
+            await runs.stop(rid)
 
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)
     app.add_routes([
         web.get("/", home), web.get(redirect_path, app_state.callback),
-        web.get("/{name:(?:index|terms|privacy)\.html}", app_state.static_doc),
-        web.get("/{name:tiktok[A-Za-z0-9]+\.txt}", app_state.static_doc),
+        web.get(r"/{name:(?:index|terms|privacy)\.html}", app_state.static_doc),
+        web.get(r"/{name:tiktok[A-Za-z0-9]+\.txt}", app_state.static_doc),
         *pages.routes(),
     ])
     if allow_posting:   # owner-only switch (CONTROL_ALLOW_POSTING=1 in .env)
         app.add_routes([
             web.get("/tiktok", app_state.index), web.get("/login", app_state.login),
             web.post("/logout", app_state.logout),
-            web.get("/video/{id:\d+}", app_state.video), web.get("/clip/{id:\d+}", app_state.review),
-            web.post("/clip/{id:\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
+            web.get(r"/video/{id:\d+}", app_state.video), web.get(r"/clip/{id:\d+}", app_state.review),
+            web.post(r"/clip/{id:\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
         ])
     return app
