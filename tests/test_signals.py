@@ -161,3 +161,21 @@ def test_sherpa_transcribes_speech(tmp_path):
     assert t is not None
     words = t.transcribe_pcm(decode_pcm(wav))
     assert isinstance(words, list) and all(isinstance(w, Word) for w in words)
+
+
+def test_drop_loops_cuts_whisper_repeats():
+    from clipfarm.speech import drop_loops, spread_words
+    words = spread_words("dude no way no way no way no way no way no way stop", 0, 6)
+    assert " ".join(w.text for w in drop_loops(words)) == "dude no way no way no way stop"
+    keep = spread_words("no no no go go", 0, 2)            # real excitement stays
+    assert len(drop_loops(keep)) == 5
+    loop = spread_words("hey " + "should be on a wall bro " * 7 + "(wind blowing) ok", 0, 6)
+    assert " ".join(w.text for w in drop_loops(loop)) == "hey should be on a wall bro ok"
+
+
+def test_caption_censor():
+    from clipfarm.craft.captions import censor
+    assert censor("FUCKING,") == "F******,"
+    assert censor("ass") == "a**"
+    assert censor("class") == "class" and censor("pass") == "pass"
+    assert censor("Shit!") == "S***!"

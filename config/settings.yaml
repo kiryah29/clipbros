@@ -56,6 +56,7 @@ speech:
   max_wait_s: 30            # wait this long for the transcript before scoring a clip
   phrase_target: 3          # this many excited phrases in the clip = full phrase points
   repeat_words: 3           # "no no no" counts as one excited phrase
+  max_words_per_s: 6        # pace above this is a transcription glitch, capped
   keywords: ["no way", "oh my god", "oh my gosh", "let's go", "lets go", "what the",
              "what the hell", "what the fuck", "holy", "are you kidding", "oh no", "yo yo",
              "clip that", "clip it", "wtf", "insane", "i'm dead", "get out",
@@ -76,6 +77,7 @@ reel:
   caption_words: 4          # words on screen at once (brand kit shows 4)
   caption_outline: 5        # Ink outline px around Paper caption text
   caption_font: "Inter ExtraBold"   # bundled in assets/fonts
+  caption_censor: true      # star out swear words in captions (word list: craft/captions.py)
   font_file: null           # override the brand font (default assets/fonts/Inter-ExtraBold.otf)
   # brand layer (see clipfarm/craft/overlay.py; palette from the brand kit in clipfarm/brand.py)
   accent_color: "#C8F03C"   # Clip Lime: seam line + highlighted caption word

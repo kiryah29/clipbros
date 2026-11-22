@@ -60,6 +60,24 @@ def _t(s: float) -> str:
     return f"{int(h)}:{int(m):02d}:{sec:05.2f}"
 
 
+# word roots masked anywhere in a word ("fucking" -> "f******"), and whole words only
+CENSOR_ROOTS = ["fuck", "shit", "bitch", "cunt", "nigg", "pussy", "whore", "slut", "fag",
+                "dick", "cock", "asshole", "bastard", "retard"]
+CENSOR_WORDS = ["ass", "hoe", "hoes", "damn"]
+
+
+def censor(word: str, roots=CENSOR_ROOTS, whole=CENSOR_WORDS) -> str:
+    """Keep the first letter and punctuation, star the rest: "FUCKING," -> "F******,"."""
+    letters = "".join(c for c in word.lower() if c.isalpha())
+    if not letters or not (letters in whole or any(r in letters for r in roots)):
+        return word
+    seen, out = False, []
+    for c in word:
+        out.append(c if not c.isalpha() or not seen else "*")
+        seen = seen or c.isalpha()
+    return "".join(out)
+
+
 def _esc(s: str) -> str:
     return s.replace("\\", "").replace("{", "(").replace("}", ")")
 
@@ -74,6 +92,10 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
     max_fs = int(cfg.get("caption_size", 84))
     outline = int(cfg.get("caption_outline", 5))
     chunk = int(cfg.get("caption_words", chunk))
+    if cfg.get("caption_censor", True):   # TikTok limits reach for on-screen swearing
+        roots = cfg.get("censor_roots", CENSOR_ROOTS)
+        whole = cfg.get("censor_words", CENSOR_WORDS)
+        words = [Word(censor(w.text, roots, whole), w.start, w.end) for w in words]
     ink, paper = brand.ass_colour(brand.INK), brand.ass_colour(brand.PAPER)   # CTA: Ink on Paper
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
