@@ -3,6 +3,7 @@ Pillow>=10.0            # brand overlays (logo, hook card) on reels
 websockets>=12.0        # Twitch chat (IRC over WebSocket)
 aiohttp>=3.9            # YouTube Live Chat API polling
 streamlink>=6.0         # live video capture (real mode only)
-# optional: word-level captions from real audio
+sherpa-onnx>=1.10       # speech-to-text (works on Windows ARM64); model: python -m clipfarm setup-speech
+# optional on x64 PCs: exact word timings for captions
 # faster-whisper>=1.0
 pytest>=8.0

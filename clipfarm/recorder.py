@@ -10,10 +10,86 @@ from __future__ import annotations
 import atexit
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 SEG_SECONDS = 2
+_JOB = None   # Windows job object holding this process and every child it starts
+
+
+def _tie_children_to_us() -> None:
+    """Make sure streamlink/ffmpeg die with us, even on a hard kill or a closed window.
+
+    Windows: put this process in a job object with KILL_ON_JOB_CLOSE. Children inherit
+    the job (including the python.exe that the streamlink.exe launcher starts), and when
+    our process ends for any reason Windows closes the job and kills all of them.
+    Linux: each child gets PDEATHSIG (see _child_setup). macOS: atexit/stop() only.
+    """
+    global _JOB
+    if _JOB is not None or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class IO(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_ulonglong) for n in "abcdef"]
+
+        class BASIC(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                        ("PerJobUserTimeLimit", ctypes.c_int64), ("LimitFlags", wintypes.DWORD),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", wintypes.DWORD), ("Affinity", ctypes.c_size_t),
+                        ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+
+        class EXT(ctypes.Structure):
+            _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        job = k32.CreateJobObjectW(None, None)
+        info = EXT()
+        info.Basic.LimitFlags = 0x2000   # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if (job and k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+                and k32.AssignProcessToJobObject(job, k32.GetCurrentProcess())):
+            _JOB = job   # keep the handle open for our whole lifetime
+    except Exception as e:  # never block recording over this; stop()/atexit still run
+        print(f"  ! could not tie child processes to clipfarm: {e}")
+
+
+def _child_setup():
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+            import signal
+            ctypes.CDLL("libc.so.6").prctl(1, signal.SIGTERM)   # PR_SET_PDEATHSIG
+        except Exception:
+            pass
+
+
+def _kill_tree(p: subprocess.Popen | None) -> None:
+    if not p or p.poll() is not None:
+        return
+    if sys.platform == "win32":   # the streamlink.exe launcher has a python.exe child
+        subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        p.terminate()
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait(timeout=5)
 
 
 def _run(cmd: list[str]) -> None:
@@ -35,8 +111,10 @@ class LiveRecorder:
     def start(self) -> None:
         if not shutil.which("streamlink"):
             raise RuntimeError("streamlink is not installed (pip install streamlink)")
+        _tie_children_to_us()
+        extra = {} if sys.platform == "win32" else {"preexec_fn": _child_setup}
         self.sl = subprocess.Popen(["streamlink", "--stdout", self.url, self.quality],
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **extra)
         # segment list (csv: file,start,end relative to t0) works on every OS,
         # unlike strftime("%s") which Windows lacks
         for f in self.dir.glob("seg_*.ts"):
@@ -49,19 +127,20 @@ class LiveRecorder:
              "-segment_time", str(SEG_SECONDS), "-reset_timestamps", "1",
              "-segment_list", str(self.list_path), "-segment_list_type", "csv",
              str(self.dir / "seg_%06d.ts")],
-            stdin=self.sl.stdout)
+            stdin=self.sl.stdout, **extra)
+        self.sl.stdout.close()   # only ffmpeg reads it now; if ffmpeg dies streamlink sees EOF
         atexit.register(self.stop)  # never leave streamlink/ffmpeg running after we exit
 
     def stop(self) -> None:
-        for p in (self.proc, self.sl):
-            if p and p.poll() is None:
-                p.terminate()
-                try:
-                    p.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    p.kill()
+        """Stop streamlink and ffmpeg (and streamlink's child process on Windows)."""
+        for p in (self.sl, self.proc):   # streamlink first, so ffmpeg flushes the last segment
+            _kill_tree(p)
 
-    def _segments(self) -> list[tuple[Path, float, float]]:
+    @property
+    def running(self) -> bool:
+        return any(p is not None and p.poll() is None for p in (self.sl, self.proc))
+
+    def segments(self) -> list[tuple[Path, float, float]]:
         """(file, abs_start, abs_end) for finished segments still on disk."""
         out = []
         if not getattr(self, "list_path", None) or not self.list_path.exists():
@@ -78,12 +157,12 @@ class LiveRecorder:
 
     def prune(self) -> None:
         cutoff = time.time() - self.keep_s
-        for f, _, end in self._segments():
+        for f, _, end in self.segments():
             if end < cutoff:
                 f.unlink(missing_ok=True)
 
     def cut(self, start_ts: float, end_ts: float, out: Path) -> Path:
-        picked = [(f, a) for f, a, b in self._segments() if b > start_ts and a < end_ts]
+        picked = [(f, a) for f, a, b in self.segments() if b > start_ts and a < end_ts]
         if not picked:
             raise RuntimeError("no buffered video for that window (was the recorder running?)")
         first = picked[0][1]

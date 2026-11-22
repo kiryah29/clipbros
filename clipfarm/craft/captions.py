@@ -17,7 +17,14 @@ class Word:
 
 
 def transcribe(media: Path, engine: str) -> list[Word]:
-    """Word timestamps from the clip audio. 'none' returns no captions."""
+    """Word timestamps from the clip audio. 'none' returns no captions; 'auto' uses
+    faster-whisper when it is installed (live runs pass the stream transcript instead)."""
+    if engine == "auto":
+        try:
+            import faster_whisper  # noqa: F401
+        except ImportError:
+            return []
+        engine = "faster_whisper"
     if engine == "faster_whisper":
         from faster_whisper import WhisperModel  # optional dependency
         model = WhisperModel("small", compute_type="int8")

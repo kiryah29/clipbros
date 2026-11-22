@@ -1,13 +1,15 @@
 # clipsbros: live clipping starter
 
-Watches a live stream's **chat**, learns each channel's normal pace, and cuts a clip the
-moment chat velocity spikes. Every clip lands in a ranked queue with a **receipt** (the
-chat data that explains why it was picked), then gets turned into a 9:16 reel with a
-facecam band, word-level captions, a hook and a CTA.
+Watches a live stream's **chat, audio and speech**, learns each streamer's normal level for
+each, and cuts a clip the moment chat or loudness spikes. Every clip gets a 0-100 score from
+six weighted signals and lands in a ranked queue with a **receipt** (the data that explains
+why it was picked), then gets turned into a 9:16 reel with a facecam band, word-level
+captions, a hook and a CTA.
 
 ```
-live channel ──► chat source ──► spike detector ──► rolling video buffer ──► clip queue ──► reel renderer
- (twitch/yt/kick)   msgs/sec      baseline + z-score    streamlink + ffmpeg     SQLite + receipt   ffmpeg + ASS captions
+live channel ─┬► chat source ──► chat spike detector ─┐
+              └► rolling video buffer ─┬► loudness ───┼► clip window ──► score ──► clip queue ──► reel renderer
+                 streamlink + ffmpeg   └► speech-to-text (pace + phrases, captions)
 ```
 
 ## Try it in 1 minute (no API keys)
@@ -19,7 +21,7 @@ pip install -r requirements.txt
 python -m clipfarm demo            # 20 min of simulated chat, detects spikes, renders reels
 python -m clipfarm queue           # ranked queue
 python -m clipfarm receipt 1       # why clip 1 was picked
-python -m pytest -q                # detector, queue and scheduler tests
+python -m pytest -q                # detector, signals, queue and scheduler tests
 ```
 
 Output goes to `data/clips/<channel>/`: `NNNNN_raw.mp4` (16:9 cut), `NNNNN_reel.mp4`
@@ -36,14 +38,55 @@ It prints the chat pace every 10 s and any spike it would have clipped.
    YouTube needs `YOUTUBE_API_KEY`).
 2. In `config/channels.yaml`, enable a channel, set `platform`, and set the `facecam`
    box (fractions of the source frame where the streamer's camera sits).
-3. `python -m clipfarm run`. Start it **before** the stream goes live, or add a `schedule`
+3. Speech-to-text (once): `python -m clipfarm setup-speech` downloads a small model
+   (~100 MB, into `models/`). Without it, speech scores 0 and everything else still works.
+4. `python -m clipfarm run`. Start it **before** the stream goes live, or add a `schedule`
    so it only watches during the streamer's usual hours.
 
 The live engine only works on live streams. It has to be running while the moment
 happens, because the clip is cut from a rolling buffer (`clip.buffer_minutes`) recorded
 alongside the chat. It does not process VODs.
 
-## How detection works (`clipfarm/detector.py`)
+One-off test on any channel without editing `channels.yaml` (records and renders, never
+posts): `python -m clipfarm run twitch <channel> --game gta6`. Ctrl+C stops it and stops
+streamlink/ffmpeg with it.
+
+## Moment score (`clipfarm/signals.py`)
+
+Each signal is compared with the streamer's own normal level: 0 points at normal, half
+points at 3x normal (`signals.trigger_ratio`), full points at 5x. Score = sum of
+weight x strength, 0-100. Weights live in `signals.weights` and must add up to 1.0:
+
+| Signal         | Weight | What it measures |
+|----------------|-------:|------------------|
+| `audio`        | 0.35 | Stream loudness vs normal (`clipfarm/audio.py`). 3x normal (about +10 dB) for 1 s also **opens a clip** on its own |
+| `speech`       | 0.20 | Streamer speech (`clipfarm/speech.py`): half talking pace vs normal, half excited phrases ("no way", "oh my god", "no no no"; list in `speech.keywords`) |
+| `chat_speed`   | 0.22 | Chat messages/s vs normal (the chat spike detector below) |
+| `chat_words`   | 0.13 | Share of hype words in chat (`ranking.hype_tokens`); half the messages = full points |
+| `game_events`  | 0.07 | Game-profile moment match (`config/games/`) |
+| `twitch_clips` | 0.03 | Viewers clipping it on Twitch. Not wired up yet, scores 0 |
+
+A scream and the chat reaction a few seconds later become **one** clip: triggers that
+overlap a clip still waiting to be cut are merged into it. The receipt shows every signal's
+points (`score_points`), the loudness ratio, the phrases heard and the transcript.
+
+**Audio**: every finished 2 s buffer segment is decoded once (16 kHz mono). Each second's
+value is its loudest 250 ms RMS, so a short yell isn't averaged away. Settings in `audio:`
+(`min_ratio`, `warmup_s`, `pre_roll_s` 15 s since a scream is AT the moment).
+
+**Speech**: the same audio is transcribed in 4 s chunks while the stream runs. Engines
+(`speech.engine`):
+
+| Engine | Install | Notes |
+|--------|---------|-------|
+| `sherpa_onnx` | in requirements.txt, then `python -m clipfarm setup-speech` | Works on Windows ARM64. Word timings are spread over each 4 s chunk |
+| `faster_whisper` | `pip install faster-whisper` | Exact word timings. x64 PCs only (no Windows ARM64 build) |
+| `auto` (default) | | faster-whisper if installed, else sherpa-onnx, else off |
+
+The transcript of the clip window is saved in the receipt and used for the reel captions
+(`reel.transcriber: auto`). If the PC can't keep up it skips old chunks and says so.
+
+## How chat detection works (`clipfarm/detector.py`)
 
 * Chat is counted in 1 s buckets and smoothed over 3 buckets.
 * An EWMA mean + variance (half-life `baseline_halflife_s`) is the channel's "normal
@@ -55,8 +98,7 @@ alongside the chat. It does not process VODs.
 * The clip window is `peak - pre_roll_s` to `end + post_roll_s`, capped at
   `max_length_s`. Chat reacts a few seconds *after* the moment, which is why pre-roll
   is longer than post-roll.
-* Score = weighted z-score, ratio, peak rate and share of hype tokens (KEKW, LUL, CLIP,
-  💀...). Weights are in `ranking:`.
+* The spike's ratio and hype-word share feed the `chat_speed` and `chat_words` signals.
 
 On simulated data across 5 seeds (2.5 h of chat, 46 injected bursts) it caught all 46
 with 1 false positive. Real chats are messier, so tune per channel in `channels.yaml`.
@@ -69,7 +111,7 @@ with 1 false positive. Real chats are messier, so tune per channel in `channels.
 | `facecam_band_ratio`        | Height share of the facecam band |
 | `backdrop`                  | Looping filler video under the gameplay (footage you own or licensed) |
 | `caption_style`             | `clipbros` (bold white caps, spoken word in lime), `pop`, `boxed`, `clean` |
-| `transcriber`               | `none` or `faster_whisper` (`pip install faster-whisper`) for real word timings |
+| `transcriber`               | `auto` (the live stream transcript, see Speech above), `faster_whisper`, or `none` |
 | `hook_text` / `hook_seconds` | Hook card on the facecam/gameplay seam (`0` = whole clip). Game profiles pick a hook per moment |
 | `cta_text`                  | End card (empty = none; a hard cut loops better) |
 | `accent_color`, `hook_bg`, `hook_color`, `show_logo`, `logo_height`, `logo` | ClipBros brand layer (`craft/overlay.py`, tokens in `brand.py`) |
@@ -103,7 +145,7 @@ Set `game: gta6` (and `streamer: "Name"` for hooks) on a channel to load
 
 * **moments**: kinds of moment (cops/chase, new mechanic, chaos/fail, hype let-down,
   graphic shock) with the chat words viewers type when they happen. A spike gets the best
-  matching label in its receipt and a ranking bonus (`ranking.w_moment`).
+  matching label in its receipt and scores the `game_events` signal.
 * **clip windows per moment**: setup-heavy moments (a chase) get a 45 s pre-roll; quick
   reactions 15 s. Post-roll is short so the clip hard-cuts after the reaction and loops.
 * **hooks per moment**, e.g. "DO NOT DO THIS IN GTA 6". `{streamer}` and `{game}` fill in.
@@ -123,7 +165,10 @@ left manual. Plug in an uploader when you're ready.
 config/settings.yaml     detector, clip, ranking, reel settings
 config/channels.yaml     channels, facecam boxes, schedules, per-channel overrides
 clipfarm/chat/           simulated, twitch (IRC/WebSocket), youtube (Data API), kick (stub)
-clipfarm/detector.py     chat-velocity spike detection + scoring
+clipfarm/detector.py     chat-velocity spike detection
+clipfarm/signals.py      per-streamer baselines + the weighted 0-100 moment score
+clipfarm/audio.py        stream loudness signal (also opens clips on screams)
+clipfarm/speech.py       speech-to-text (sherpa-onnx / faster-whisper), pace + phrases
 clipfarm/recorder.py     rolling live buffer + cutting; demo video generator
 clipfarm/queue.py        SQLite ranked queue with receipts
 config/games/            game profiles (moment hints, hooks, clip windows)
@@ -136,8 +181,8 @@ clipfarm/engine.py       wires it together (demo + live)
 ## Extending
 
 * **Kick**: implement `KickChat.messages()` against Kick's official developer API.
-* **Better signal**: add audio loudness or a "clip"-command counter as extra score terms
-  in `score_spike`.
+* **Twitch clips signal**: count clips created on Twitch (Helix `GET /clips`) in the window
+  and fill `twitch_clips` in `engine.score_moment`.
 * **Uploads**: add a publisher that takes `approved` clips from the queue.
 
 ## Rules of the road

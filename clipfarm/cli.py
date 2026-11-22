@@ -50,7 +50,13 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--no-render", action="store_true", help="detect + queue only, skip ffmpeg")
     d.add_argument("--seed", type=int, default=7)
 
-    sub.add_parser("run", help="monitor enabled live channels")
+    r = sub.add_parser("run", help="monitor enabled live channels (or one: run twitch <name>)")
+    r.add_argument("platform", nargs="?", choices=["twitch", "youtube", "kick"])
+    r.add_argument("channel", nargs="?")
+    r.add_argument("--game", default=None, help="game profile for a one-off channel, e.g. gta6")
+
+    ss = sub.add_parser("setup-speech", help="download the speech-to-text model and test it")
+    ss.add_argument("--model-dir", default=None)
 
     w = sub.add_parser("watch", help="chat-only test: show live chat pace and spikes, no recording")
     w.add_argument("platform", choices=["twitch", "youtube", "kick"])
@@ -88,6 +94,11 @@ def main(argv: list[str] | None = None) -> None:
         print("\nRanked queue:")
         _print_queue(queue, None, 20)
     elif a.cmd == "run":
+        if a.channel:   # one-off: this channel only, whatever channels.yaml says
+            found = next((c for c in channels if c["name"].lower() == a.channel.lower()
+                          and c["platform"] == a.platform), {})
+            channels = [{**found, "name": a.channel, "platform": a.platform, "enabled": True,
+                         "schedule": [], **({"game": a.game} if a.game else {})}]
         try:
             asyncio.run(run_live(settings, channels, data_dir))
         except KeyboardInterrupt:
@@ -98,6 +109,24 @@ def main(argv: list[str] | None = None) -> None:
             asyncio.run(watch_chat(settings, {"name": a.channel, "platform": a.platform}))
         except KeyboardInterrupt:
             pass
+    elif a.cmd == "setup-speech":
+        from .speech import download_sherpa_model, make_transcriber
+        try:
+            import faster_whisper  # noqa: F401
+            print("faster-whisper is installed; it is used first (engine: auto).")
+        except ImportError:
+            print("faster-whisper is not installed (it has no Windows ARM64 build); "
+                  "using sherpa-onnx.")
+        path = download_sherpa_model(Path(a.model_dir) if a.model_dir else None)
+        print(f"sherpa-onnx model: {path}")
+        if a.model_dir:
+            print(f"Set speech.sherpa_model_dir: {path} in config/settings.yaml")
+        t = make_transcriber({**settings["speech"], "sherpa_model_dir": str(path)})
+        if t is None:
+            sys.exit("Speech-to-text still unavailable: pip install sherpa-onnx")
+        from .audio import SAMPLE_RATE
+        t.transcribe_pcm(b"\x00\x00" * SAMPLE_RATE)   # loads + runs the model once
+        print(f"Speech-to-text ready: {t.name}")
     elif a.cmd == "tiktok-app":
         from aiohttp import web
         from .tiktok.api import Config as TTConfig, TikTokError

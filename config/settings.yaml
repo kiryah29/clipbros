@@ -20,12 +20,46 @@ clip:
   quality: "1080p60,1080p,best"
 
 ranking:
-  # score = w_z * z + w_ratio * ratio + w_peak * peak_rate + w_hype * hype_share
-  w_z: 1.0
-  w_ratio: 0.5
-  w_peak: 0.2
-  w_hype: 3.0
   hype_tokens: ["LUL", "KEKW", "OMEGALUL", "POG", "POGGERS", "W", "CLIP", "LMAO", "😂", "💀", "🔥"]
+
+# Moment score (0-100) = sum of weight x strength for each signal. A signal's strength is
+# measured against the streamer's own normal level: 0 at normal, half at `trigger_ratio`
+# (3x normal), full at 5x. Weights must add up to 1.0. See clipfarm/signals.py.
+signals:
+  trigger_ratio: 3.0
+  weights:
+    audio: 0.35             # stream loudness vs normal (screams, explosions)
+    speech: 0.20            # streamer talking faster than normal + excited phrases
+    chat_speed: 0.22        # chat messages/s vs normal
+    chat_words: 0.13        # share of hype words in chat (hype_tokens above)
+    game_events: 0.07       # game-profile moment match (config/games/)
+    twitch_clips: 0.03      # viewers clipping it on Twitch (not wired up yet, scores 0)
+
+audio:
+  enabled: true
+  min_ratio: 3.0            # loudness 3x the streamer's normal (about +10 dB) opens a clip
+  min_sustain_s: 1          # ...for at least this long
+  warmup_s: 90              # learn the normal loudness first
+  baseline_halflife_s: 300
+  cooldown_s: 30
+  silence_floor: 0.01       # quiet stretches don't drag "normal" below this (RMS 0..1)
+  pre_roll_s: 15            # a scream is AT the moment: shorter look-back than chat
+  post_roll_s: 6
+
+speech:
+  engine: auto              # auto | faster_whisper | sherpa_onnx | none (see README)
+  whisper_model: base.en    # faster_whisper model size
+  sherpa_model_dir: models/sherpa-onnx-whisper-tiny.en   # python -m clipfarm setup-speech
+  language: en
+  chunk_s: 4                # transcribe the stream in chunks this long
+  max_backlog: 6            # if the PC falls behind, drop the oldest chunks
+  max_wait_s: 30            # wait this long for the transcript before scoring a clip
+  phrase_target: 3          # this many excited phrases in the clip = full phrase points
+  repeat_words: 3           # "no no no" counts as one excited phrase
+  keywords: ["no way", "oh my god", "oh my gosh", "let's go", "lets go", "what the",
+             "what the hell", "what the fuck", "holy", "are you kidding", "oh no", "yo yo",
+             "clip that", "clip it", "wtf", "insane", "i'm dead", "get out",
+             "help", "bro what", "nah"]
 
 reel:
   width: 1080
@@ -56,4 +90,4 @@ reel:
   hook_seconds: 0           # 0 = hook card stays up the whole clip
   cta_text: "Follow for more clips"
   cta_seconds: 2.5
-  transcriber: none         # none | faster_whisper
+  transcriber: auto         # auto = live stream transcript | faster_whisper | none
