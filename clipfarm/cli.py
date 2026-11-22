@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="clipfarm", description="Chat-velocity live clipper")
     p.add_argument("--settings", default=None)
     p.add_argument("--channels", default=None)
+    p.add_argument("--data-dir", default=None, help="clips + queue.db folder (overrides settings data_dir)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("demo", help="run the full pipeline on simulated chat (no API keys)")
@@ -54,6 +55,9 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("platform", nargs="?", choices=["twitch", "youtube", "kick"])
     r.add_argument("channel", nargs="?")
     r.add_argument("--game", default=None, help="game profile for a one-off channel, e.g. gta6")
+    r.add_argument("--minutes", type=float, default=None, help="stop by itself after this many minutes")
+
+    sub.add_parser("control-password", help="make the CONTROL_PASSWORD_HASH line for .env")
 
     ss = sub.add_parser("setup-speech", help="download the speech-to-text model and test it")
     ss.add_argument("--model-dir", default=None)
@@ -85,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
     a = p.parse_args(argv)
     settings = load_settings(a.settings)
     channels = load_channels(a.channels)
-    data_dir = (ROOT / settings["data_dir"]).resolve()
+    data_dir = Path(a.data_dir).resolve() if a.data_dir else (ROOT / settings["data_dir"]).resolve()
     q = lambda: ClipQueue(data_dir / "queue.db")  # noqa: E731
 
     if a.cmd == "demo":
@@ -101,10 +105,20 @@ def main(argv: list[str] | None = None) -> None:
                           and c["platform"] == a.platform), {})
             channels = [{**found, "name": a.channel, "platform": a.platform, "enabled": True,
                          "schedule": [], **({"game": a.game} if a.game else {})}]
+        live = run_live(settings, channels, data_dir)
         try:
-            asyncio.run(run_live(settings, channels, data_dir))
+            asyncio.run(asyncio.wait_for(live, a.minutes * 60) if a.minutes else live)
         except KeyboardInterrupt:
             print("stopped")
+        except TimeoutError:
+            print("time limit reached, stopped")
+    elif a.cmd == "control-password":
+        import getpass
+        from .control import hash_password
+        pw = getpass.getpass("Shared password: ")
+        if len(pw) < 10 or pw != getpass.getpass("Again: "):
+            sys.exit("Passwords differ or are shorter than 10 characters.")
+        print(f"CONTROL_PASSWORD_HASH={hash_password(pw)}")
     elif a.cmd == "watch":
         from .engine import watch_chat
         try:
@@ -138,7 +152,12 @@ def main(argv: list[str] | None = None) -> None:
             cfg = TTConfig.from_env()
         except TikTokError as ex:
             sys.exit(f"TikTok app not configured: {ex} (see README, 'Post to TikTok')")
-        web.run_app(build_app(cfg, data_dir / "queue.db", data_dir / "tiktok_token.json"),
+        from .recorder import _tie_children_to_us
+        _tie_children_to_us()   # control-page runs die with the app
+        web.run_app(build_app(cfg, data_dir / "queue.db", data_dir / "tiktok_token.json",
+                              password_hash=os.getenv("CONTROL_PASSWORD_HASH") or None,
+                              allow_posting=os.getenv("CONTROL_ALLOW_POSTING") == "1",
+                              keep_days=float(os.getenv("CONTROL_KEEP_DAYS") or 3)),
                     host=a.host, port=a.port)
     elif a.cmd == "queue":
         _print_queue(q(), a.status, a.limit)
