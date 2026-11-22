@@ -36,9 +36,24 @@ reel:
   backdrop: null            # e.g. assets/backdrops/parkour.mp4 (must be footage you own/licensed)
   music: null               # e.g. assets/music/track.mp3 (licensed!)
   music_volume: 0.12
-  caption_style: pop        # pop | boxed | clean
-  hook_text: "WAIT FOR IT..."
-  hook_seconds: 2.5
+  caption_style: clipbros   # clipbros | pop | boxed | clean
+  caption_size: 84          # max caption font px (long chunks shrink to fit)
+  caption_y_ratio: 0.60     # caption line centre, as a share of height
+  caption_words: 4          # words on screen at once (brand kit shows 4)
+  caption_outline: 5        # Ink outline px around Paper caption text
+  caption_font: "Inter ExtraBold"   # bundled in assets/fonts
+  font_file: null           # override the brand font (default assets/fonts/Inter-ExtraBold.otf)
+  # brand layer (see clipfarm/craft/overlay.py; palette from the brand kit in clipfarm/brand.py)
+  accent_color: "#C8F03C"   # Clip Lime: seam line + highlighted caption word
+  hook_bg: "#F3F0E8"        # Paper: hook card fill
+  hook_color: "#131119"     # Ink: hook card text
+  show_logo: true           # ClipBros lockup top-left
+  logo_height: 44           # lockup mark height px (lockup ~220 px wide; kit minimum is 120)
+  logo: null                # null = brand-kit lockup drawn from code; or a PNG used as-is
+  # keep-clear zones (px) for TikTok UI: side buttons on the right, caption/sound bar at the bottom
+  safe_zone: {left: 62, top: 112, right: 124, bottom: 320}
+  hook_text: "WAIT FOR IT..."   # fallback; game profiles pick a hook per moment
+  hook_seconds: 0           # 0 = hook card stays up the whole clip
   cta_text: "Follow for more clips"
   cta_seconds: 2.5
   transcriber: none         # none | faster_whisper

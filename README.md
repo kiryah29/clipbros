@@ -68,12 +68,49 @@ with 1 false positive. Real chats are messier, so tune per channel in `channels.
 | `layout`                    | `facecam_top` (facecam band / gameplay / optional backdrop) or `gameplay_only` (blurred fill) |
 | `facecam_band_ratio`        | Height share of the facecam band |
 | `backdrop`                  | Looping filler video under the gameplay (footage you own or licensed) |
-| `caption_style`             | `pop` (active word coloured and scaled), `boxed`, `clean` |
+| `caption_style`             | `clipbros` (bold white caps, spoken word in lime), `pop`, `boxed`, `clean` |
 | `transcriber`               | `none` or `faster_whisper` (`pip install faster-whisper`) for real word timings |
-| `hook_text` / `cta_text`    | Burned-in opener and end card |
+| `hook_text` / `hook_seconds` | Hook card on the facecam/gameplay seam (`0` = whole clip). Game profiles pick a hook per moment |
+| `cta_text`                  | End card (empty = none; a hard cut loops better) |
+| `accent_color`, `hook_bg`, `hook_color`, `show_logo`, `logo_height`, `logo` | ClipBros brand layer (`craft/overlay.py`, tokens in `brand.py`) |
+| `caption_words`, `caption_outline` | words on screen at once, Ink outline px |
+| `safe_zone`                 | Pixels kept clear for TikTok's side buttons (right) and description/sound bar (bottom) |
 | `music` / `music_volume`    | Optional licensed track mixed under the clip audio |
 
 Re-render any clip after changing settings: `python -m clipfarm render <id>`.
+
+The default look follows the ClipBros Brand Kit (on-clip page): facecam top 30 %, a Clip Lime
+line on the seam, the hook in Inter 800 Ink on a Paper card straddling it, the primary lockup
+top-left with one bracket length of clear space, and captions in Inter 800 caps (Paper with an
+Ink outline, four words at a time) with the spoken word in Clip Lime, everything inside the
+TikTok safe zone. Fonts (Inter ExtraBold and Space Grotesk Bold, both OFL) ship in
+`assets/fonts/` so reels look the same on every PC.
+
+### Brand kit in code (`clipfarm/brand.py`)
+
+Palette, fonts and logo rules live in one module: Ink `#131119`, Night `#1D1A26`, Paper
+`#F3F0E8`, Clip Lime `#C8F03C`, Stream Violet `#7C5CFF`, Fog `#A49FB2`. The logo (corner
+brackets + play button, two-tone "ClipBros" wordmark) is drawn from geometry, so it stays sharp
+at any size, and falls back to the mark alone below the kit's 120 px minimum. The review web
+app and the `docs/` pages use the same tokens (Ink theme with Lime, Paper theme with Violet).
+Regenerate the logo PNGs (mark, lockups on Ink and on Paper, TikTok profile picture) with
+`python -m clipfarm.brand`.
+
+## Game profiles (`config/games/`)
+
+Set `game: gta6` (and `streamer: "Name"` for hooks) on a channel to load
+`config/games/gta6.yaml`. A profile adds:
+
+* **moments**: kinds of moment (cops/chase, new mechanic, chaos/fail, hype let-down,
+  graphic shock) with the chat words viewers type when they happen. A spike gets the best
+  matching label in its receipt and a ranking bonus (`ranking.w_moment`).
+* **clip windows per moment**: setup-heavy moments (a chase) get a 45 s pre-roll; quick
+  reactions 15 s. Post-roll is short so the clip hard-cuts after the reaction and loops.
+* **hooks per moment**, e.g. "DO NOT DO THIS IN GTA 6". `{streamer}` and `{game}` fill in.
+* **safety holds**: moments marked `safety: review` (gore) set `safety_review: true` in the
+  receipt so they are never auto-posted.
+
+Merge order is `settings.yaml` < game profile < the channel's own overrides.
 
 ## Review workflow
 
@@ -89,7 +126,9 @@ clipfarm/chat/           simulated, twitch (IRC/WebSocket), youtube (Data API), 
 clipfarm/detector.py     chat-velocity spike detection + scoring
 clipfarm/recorder.py     rolling live buffer + cutting; demo video generator
 clipfarm/queue.py        SQLite ranked queue with receipts
-clipfarm/craft/          9:16 reel renderer + ASS captions/hook/CTA
+config/games/            game profiles (moment hints, hooks, clip windows)
+clipfarm/moments.py      labels spikes with a game moment, picks hook + clip window
+clipfarm/craft/          9:16 reel renderer, ASS captions, brand overlay (logo/hook card)
 clipfarm/scheduler.py    smart scheduling windows
 clipfarm/engine.py       wires it together (demo + live)
 ```

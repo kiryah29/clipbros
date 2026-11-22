@@ -1,0 +1,100 @@
+# GTA 6 game profile. A channel uses it with `game: gta6` in channels.yaml.
+# Merge order: settings.yaml < this file < the channel's own overrides.
+#
+# Learned from 6 reference TikToks (Nov 2026: @clipbruvs x2, @luckychamuu,
+# @tertialcam, @speedmoments67 and one more @clipbruvs post). What they share:
+#   - ONE continuous uncut stretch of stream, 24-61 s. No jump cuts, no added music.
+#   - Hard cut 2-5 s after the streamer's reaction peaks, no CTA, so it loops.
+#   - Facecam top ~30-35 %, gameplay below, white rounded hook card on the seam,
+#     dark bold text, kept up the whole clip.
+#   - Hooks are either a warning ("DO NOT STEAL A TESLA IN GTA 6") or a
+#     one-line story ("Speed switched to Lucia to ...").
+#   - Two shapes of clip: short reaction (payoff at 5-8 s, 24-35 s long) and
+#     escalation story (setup first, payoff at 40-57 s of a 60 s clip).
+# Chat reacts AFTER the payoff, so escalation moments need a long pre-roll.
+
+game_name: "GTA 6"
+
+clip:
+  pre_roll_s: 25            # default; moments below override it
+  post_roll_s: 4            # hard cut soon after the reaction (loops better)
+  max_length_s: 60
+  min_length_s: 20
+
+ranking:
+  w_moment: 4.0             # bonus = w_moment * moment share * moment weight
+  hype_tokens: ["LUL", "KEKW", "OMEGALUL", "LMAO", "LMFAO", "W", "CLIP", "NAHH",
+                "BRO", "💀", "😭", "😂", "🔥", "WTF", "YOOO"]
+
+reel:
+  caption_style: clipbros
+  hook_seconds: 0           # hook card stays up the whole clip, like the references
+  cta_text: ""              # none of the references end on a CTA; a hard cut loops better
+
+moments:
+  # Crime -> cops show up -> it spirals. Biggest-performing shape in the set
+  # (scooter getaway, AI car driving the player to the police).
+  - name: police_escalation
+    label: "cops / wanted level / chase"
+    weight: 1.3
+    pre_roll_s: 45          # setup matters: show the crime before the cops arrive
+    post_roll_s: 4
+    chat_keywords: [cops, cop, police, 5 star, five star, wanted, chase, run, arrested,
+                    busted, swat, getaway, 🚓, 🚨]
+    hook_templates:
+      - "DO NOT DO THIS IN {game}"
+      - "{streamer} vs the cops in {game}"
+      - "{streamer} did NOT get away with this"
+
+  # A new GTA 6 system nobody has seen yet (anti-theft AI car, character swap,
+  # new vehicle/weapon behaviour). Novelty is the hook.
+  - name: new_mechanic
+    label: "new GTA 6 mechanic"
+    weight: 1.2
+    pre_roll_s: 30
+    post_roll_s: 5
+    chat_keywords: [new, didn't know, didnt know, no way, how, realistic, details, detail,
+                    insane, tesla, ai, lucia, jason, switch, rockstar, next gen, physics]
+    hook_templates:
+      - "DO NOT TRY THIS IN {game}"
+      - "{game} is way too realistic"
+      - "Nobody knew {game} could do this"
+
+  # Absurd vehicle / stupid plan going wrong (mobility scooter, ragdoll, crash).
+  - name: chaos_fail
+    label: "chaos / fail / ragdoll"
+    weight: 1.1
+    pre_roll_s: 30
+    post_roll_s: 4
+    chat_keywords: [fail, crash, ragdoll, scooter, flew, fell, ded, dead, wasted,
+                    skill issue, bro what, how did he]
+    hook_templates:
+      - "{streamer} had ONE job"
+      - "This went wrong so fast"
+      - "{streamer} in {game} is pure chaos"
+
+  # Big hype reaction contrasted with a deadpan reply or let-down ("that's lapis").
+  # Short clip: payoff lands in the first 5-8 s.
+  - name: hype_letdown
+    label: "big reaction / let-down"
+    weight: 1.0
+    pre_roll_s: 15
+    post_roll_s: 3
+    # specific words only: generic hype (LMAO, KEKW, 😂) is already in hype_tokens
+    chat_keywords: [scream, screaming, my ears, ears, deaf, bro thought, he thought,
+                    thought he, "thats lapis", "that's it", fake, bait]
+    hook_templates:
+      - "He really thought he had it"
+      - "{streamer} was NOT ready for this"
+
+  # Gore / violence shock reactions do get views, but they risk TikTok reach and
+  # brand/campaign rules. Detected so they can be held for review, never auto-posted.
+  - name: graphic_shock
+    label: "graphic violence (review)"
+    weight: 0.6
+    safety: review
+    pre_roll_s: 15
+    post_roll_s: 3
+    chat_keywords: [blood, gore, head, headless, decapitated, dismember, brutal, shotgun]
+    hook_templates:
+      - "{game} was NOT ready for {streamer}"

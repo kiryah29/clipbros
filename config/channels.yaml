@@ -3,9 +3,22 @@ channels:
   - name: demo_streamer
     platform: simulated       # simulated | twitch | youtube | kick
     enabled: true
+    game: gta6                # game profile from config/games/ (moment hints, hooks, clip windows)
+    streamer: "Demo"          # display name used in hook templates
+    sim:                      # demo only: GTA-flavoured hype chat so moment hints fire
+      hype_lines: ["COPS 💀", "5 STAR LMAO", "bro is getting chased", "WANTED LEVEL",
+                   "the police 😭", "RUN"]
     # facecam crop in the SOURCE frame (x, y, w, h as fractions of width/height)
     facecam: {x: 0.72, y: 0.70, w: 0.27, h: 0.28}
     schedule: []              # empty = always monitor while running
+
+  - name: jasontheween       # first streamer from the ClipBros brief
+    platform: twitch
+    enabled: false
+    game: gta6
+    streamer: "Jason"
+    facecam: {x: 0.0, y: 0.0, w: 0.25, h: 0.25}   # measure from a real frame before enabling
+    schedule: []
 
   - name: some_twitch_channel
     platform: twitch

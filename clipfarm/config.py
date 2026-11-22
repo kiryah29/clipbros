@@ -31,7 +31,23 @@ def load_channels(path: str | Path | None = None) -> list[dict[str, Any]]:
         return yaml.safe_load(f).get("channels", [])
 
 
+def load_game(game: str | None) -> dict[str, Any]:
+    """Game profile from config/games/<game>.yaml ({} if none)."""
+    if not game:
+        return {}
+    path = ROOT / "config" / "games" / f"{game}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"no game profile at {path}")
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 def channel_settings(settings: dict, channel: dict) -> dict:
-    """Global settings with the channel's per-section overrides applied."""
+    """Global settings < the channel's game profile < the channel's own overrides."""
+    out = _deep_merge(settings, load_game(channel.get("game")))
     overrides = {k: channel[k] for k in ("detector", "clip", "ranking", "reel") if k in channel}
-    return _deep_merge(settings, overrides)
+    out = _deep_merge(out, overrides)
+    out.setdefault("moments", [])
+    out.setdefault("game_name", channel.get("game") or "")
+    out["streamer"] = channel.get("streamer") or channel["name"].lstrip("@")
+    return out

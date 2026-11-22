@@ -16,27 +16,26 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
+from .. import brand
 from ..queue import ClipQueue
 from .api import Config, TikTokClient, TikTokError, Token, TokenStore, authorize_url
 
-CSS = """
-:root{color-scheme:light dark;--bg:#fff;--fg:#161616;--mut:#666;--line:#ddd;--acc:#fe2c55;--card:#f6f6f6}
-@media(prefers-color-scheme:dark){:root{--bg:#121212;--fg:#f1f1f1;--mut:#aaa;--line:#333;--acc:#fe2c55;--card:#1c1c1c}}
-body{font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);max-width:760px;margin:0 auto;padding:16px}
-h1{font-size:1.4rem}a{color:var(--acc)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+CSS = brand.WEB_CSS + """
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.mut{color:var(--mut);font-size:.9rem}
-button,.btn{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:1rem;cursor:pointer;text-decoration:none;display:inline-block}
+button,.btn{background:var(--acc);color:var(--on-acc);border:0;border-radius:10px;padding:10px 16px;font:600 1rem Inter,system-ui,sans-serif;cursor:pointer;text-decoration:none;display:inline-block}
 button[disabled]{opacity:.45;cursor:not-allowed}.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
-input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
-video{width:100%;max-height:420px;border-radius:8px;background:#000}img.av{width:44px;height:44px;border-radius:50%}
-label.opt{display:block;margin:6px 0}.err{color:#d33}.ok{color:#1a8f3c}
+input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
+video{width:100%;max-height:420px;border-radius:10px;background:#000}img.av{width:44px;height:44px;border-radius:50%}
+label.opt{display:block;margin:6px 0}.err{color:#FF6B6B}.ok{color:var(--acc)}
 """
 
 
 def page(title: str, body: str) -> web.Response:
     doc = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
            f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{html.escape(title)}</title>"
-           f"<style>{CSS}</style></head><body><h1>Clip bros app</h1>{body}"
+           f"{brand.FONTS_LINK}<style>{CSS}</style></head><body>"
+           f"<header>{brand.logo_html().replace('{home}', '/')}<span class='label'>Clip bros app</span></header>{body}"
            f"<p class='mut'><a href='/'>Clips</a> &middot; <a href='{LEGAL}terms.html'>Terms</a> &middot; "
            f"<a href='{LEGAL}privacy.html'>Privacy</a></p></body></html>")
     return web.Response(text=doc, content_type="text/html")
