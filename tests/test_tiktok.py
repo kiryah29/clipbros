@@ -160,3 +160,10 @@ def test_serves_legal_pages_and_verification_files(tmp_path):
     assert "tiktok-developers-site-verification=" in out["/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt"][1]
     assert out["/tiktokNope.txt"][0] == 404
     assert out["/..%2FREADME.md"][0] == 404 and out["/tiktok..%2f..%2fREADME.txt"][0] == 404
+
+
+def test_friendly_error_for_unaudited_private_rule():
+    from clipfarm.tiktok.webapp import friendly
+    msg = friendly(api.TikTokError("unaudited_client_can_only_post_to_private_accounts: blocked"))
+    assert "PRIVATE TikTok account" in msg and "Private account" in msg
+    assert friendly(api.TikTokError("some_other: <b>x</b>")) == "some_other: &lt;b&gt;x&lt;/b&gt;"

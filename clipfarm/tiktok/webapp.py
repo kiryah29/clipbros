@@ -44,6 +44,28 @@ def page(title: str, body: str) -> web.Response:
 LEGAL = "/"
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 e = html.escape
+FRIENDLY_ERRORS = {
+    "unaudited_client_can_only_post_to_private_accounts":
+        "TikTok only lets an app that has not been audited post to a PRIVATE TikTok account. Set your TikTok account "
+        "to private in the TikTok app (Settings and privacy, Privacy, Private account), then post again with "
+        "'Only me'. You can make it public again after posting, or after TikTok approves the app.",
+    "privacy_level_option_mismatch":
+        "The privacy choice is not allowed for your account. Pick one of the options in the list.",
+    "access_token_invalid": "Your TikTok login has expired. Disconnect and connect TikTok again.",
+    "scope_not_authorized": "The app is missing the video.publish permission. Disconnect, then connect TikTok again "
+                            "and approve all permissions.",
+    "spam_risk_too_many_posts": "TikTok's daily posting limit for this account was reached. Try again tomorrow.",
+}
+
+
+def friendly(ex: Exception) -> str:
+    text = str(ex)
+    for code, msg in FRIENDLY_ERRORS.items():
+        if code in text:
+            return f"{msg} <span class='mut'>(TikTok error: {e(code)})</span>"
+    return e(text)
+
+
 PRIVACY_LABELS = {"PUBLIC_TO_EVERYONE": "Everyone", "MUTUAL_FOLLOW_FRIENDS": "Friends",
                   "FOLLOWER_OF_CREATOR": "Followers", "SELF_ONLY": "Only me"}
 
@@ -221,7 +243,7 @@ f.addEventListener('input',sync);f.addEventListener('change',sync);sync();
         try:
             pid = await self.client().publish_video(tok, p, post_info)
         except TikTokError as ex:
-            return page("Not posted", f"<p class='err'>{e(str(ex))}</p><a href='/clip/{cid}'>Back</a>")
+            return page("Not posted", f"<p class='err'>{friendly(ex)}</p><a href='/clip/{cid}'>Back</a>")
         self.queue.update(cid, status="approved")
         body = f"""<div class='card'><p>Upload sent to TikTok. Checking status&hellip;</p><p id='s' class='mut'>PROCESSING</p></div>
 <script>
