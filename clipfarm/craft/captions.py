@@ -1,4 +1,6 @@
-"""Word-level captions, hook and CTA rendered as one ASS subtitle file."""
+"""Word-level captions and the CTA rendered as one ASS subtitle file.
+
+The hook card is drawn separately as a brand overlay (see overlay.py)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,6 +38,8 @@ STYLES = {
     "pop":   ("&H00FFFFFF", "&H0000E5FF", "&H00000000", "&H00000000", 1, 115),
     "boxed": ("&H00FFFFFF", "&H00FFFFFF", "&H00000000", "&H000000FF", 3, 100),
     "clean": ("&H00FFFFFF", "&H00FFFFFF", "&H64000000", "&H00000000", 1, 100),
+    # ClipBros mockup: bold white caps, the spoken word in lime (#C8F032), dark outline
+    "clipbros": ("&H00FFFFFF", "&H0032F0C8", "&H00101010", "&H80000000", 1, 104),
 }
 
 
@@ -51,18 +55,21 @@ def _esc(s: str) -> str:
 
 
 def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out: Path,
-              chunk: int = 3) -> Path:
+              chunk: int = 3, caption_x: int | None = None, max_w: int | None = None) -> Path:
     W, H = cfg["width"], cfg["height"]
+    cx = caption_x if caption_x is not None else W // 2
+    max_w = max_w or W - 120
     prim, hi, outl, back, border, scale = STYLES.get(cfg["caption_style"], STYLES["pop"])
+    font = cfg.get("caption_font", "Inter ExtraBold")
+    max_fs = int(cfg.get("caption_size", 84))
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
         "WrapStyle: 2", "", "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Caption,DejaVu Sans,92,{prim},{hi},{outl},{back},1,0,0,0,100,100,0,0,{border},7,2,8,60,60,0,1",
-        "Style: Hook,DejaVu Sans,96,&H00000000,&H00000000,&H0000D7FF,&H0000D7FF,1,0,0,0,100,100,0,0,3,18,0,8,80,80,140,1",
-        "Style: CTA,DejaVu Sans,72,&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,1,0,0,0,100,100,0,0,3,20,0,2,80,80,170,1",
+        f"Style: Caption,{font},{max_fs},{prim},{hi},{outl},{back},1,0,0,0,100,100,0,0,{border},6,3,5,60,60,0,1",
+        f"Style: CTA,{font},64,&H00111111,&H00111111,&H00EAF1F3,&H00EAF1F3,1,0,0,0,100,100,0,0,3,20,0,2,80,80,420,1",
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
@@ -79,12 +86,9 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
                 else:
                     parts.append(txt)
             n_chars = len(" ".join(g.text for g in group))
-            fs = min(92, int((W - 120) / (0.72 * max(n_chars, 1))))  # shrink long chunks to fit
+            fs = min(max_fs, int(max_w / (0.70 * max(n_chars, 1))))  # shrink long chunks to fit
             lines.append(f"Dialogue: 1,{_t(w.start)},{_t(end)},Caption,,0,0,0,,"
-                         f"{{\\pos({W // 2},{caption_y})\\fs{fs}}}" + " ".join(parts))
-    if cfg.get("hook_text"):
-        lines.append(f"Dialogue: 2,{_t(0)},{_t(cfg['hook_seconds'])},Hook,,0,0,0,,"
-                     f"{{\\fad(100,200)}}{_esc(cfg['hook_text'])}")
+                         f"{{\\pos({cx},{caption_y})\\fs{fs}}}" + " ".join(parts))
     if cfg.get("cta_text"):
         lines.append(f"Dialogue: 2,{_t(duration - cfg['cta_seconds'])},{_t(duration)},CTA,,0,0,0,,"
                      f"{{\\fad(200,0)}}{_esc(cfg['cta_text'])}")

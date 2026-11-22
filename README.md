@@ -68,12 +68,36 @@ with 1 false positive. Real chats are messier, so tune per channel in `channels.
 | `layout`                    | `facecam_top` (facecam band / gameplay / optional backdrop) or `gameplay_only` (blurred fill) |
 | `facecam_band_ratio`        | Height share of the facecam band |
 | `backdrop`                  | Looping filler video under the gameplay (footage you own or licensed) |
-| `caption_style`             | `pop` (active word coloured and scaled), `boxed`, `clean` |
+| `caption_style`             | `clipbros` (bold white caps, spoken word in lime), `pop`, `boxed`, `clean` |
 | `transcriber`               | `none` or `faster_whisper` (`pip install faster-whisper`) for real word timings |
-| `hook_text` / `cta_text`    | Burned-in opener and end card |
+| `hook_text` / `hook_seconds` | Hook card on the facecam/gameplay seam (`0` = whole clip). Game profiles pick a hook per moment |
+| `cta_text`                  | End card (empty = none; a hard cut loops better) |
+| `accent_color`, `hook_bg`, `hook_color`, `show_logo`, `logo` | ClipBros brand layer (`craft/overlay.py`) |
+| `safe_zone`                 | Pixels kept clear for TikTok's side buttons (right) and description/sound bar (bottom) |
 | `music` / `music_volume`    | Optional licensed track mixed under the clip audio |
 
 Re-render any clip after changing settings: `python -m clipfarm render <id>`.
+
+The default look follows the ClipBros mockup: facecam top 30 %, lime line on the seam,
+off-white hook card with dark bold text straddling it, logo top-left, captions at 60 %
+height with the spoken word in lime, everything inside the TikTok safe zone. The brand
+font (Inter ExtraBold, OFL) ships in `assets/fonts/` so reels look the same on every PC.
+
+## Game profiles (`config/games/`)
+
+Set `game: gta6` (and `streamer: "Name"` for hooks) on a channel to load
+`config/games/gta6.yaml`. A profile adds:
+
+* **moments**: kinds of moment (cops/chase, new mechanic, chaos/fail, hype let-down,
+  graphic shock) with the chat words viewers type when they happen. A spike gets the best
+  matching label in its receipt and a ranking bonus (`ranking.w_moment`).
+* **clip windows per moment**: setup-heavy moments (a chase) get a 45 s pre-roll; quick
+  reactions 15 s. Post-roll is short so the clip hard-cuts after the reaction and loops.
+* **hooks per moment**, e.g. "DO NOT DO THIS IN GTA 6". `{streamer}` and `{game}` fill in.
+* **safety holds**: moments marked `safety: review` (gore) set `safety_review: true` in the
+  receipt so they are never auto-posted.
+
+Merge order is `settings.yaml` < game profile < the channel's own overrides.
 
 ## Review workflow
 
@@ -89,7 +113,9 @@ clipfarm/chat/           simulated, twitch (IRC/WebSocket), youtube (Data API), 
 clipfarm/detector.py     chat-velocity spike detection + scoring
 clipfarm/recorder.py     rolling live buffer + cutting; demo video generator
 clipfarm/queue.py        SQLite ranked queue with receipts
-clipfarm/craft/          9:16 reel renderer + ASS captions/hook/CTA
+config/games/            game profiles (moment hints, hooks, clip windows)
+clipfarm/moments.py      labels spikes with a game moment, picks hook + clip window
+clipfarm/craft/          9:16 reel renderer, ASS captions, brand overlay (logo/hook card)
 clipfarm/scheduler.py    smart scheduling windows
 clipfarm/engine.py       wires it together (demo + live)
 ```

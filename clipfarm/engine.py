@@ -13,17 +13,39 @@ from .craft import render_reel
 from .craft.captions import fake_words, transcribe
 from .detector import SpikeDetector, score_spike
 from .models import Spike
+from .moments import classify, clip_window_for, pick_hook
 from .queue import ClipQueue
 from .recorder import DemoRecorder, LiveRecorder
 from .scheduler import in_window
 
 
-def clip_window(spike: Spike, clip_cfg: dict) -> tuple[float, float]:
-    start = spike.peak_ts - clip_cfg["pre_roll_s"]
-    end = max(spike.end_ts, spike.peak_ts) + clip_cfg["post_roll_s"]
-    if end - start > clip_cfg["max_length_s"]:
-        start = end - clip_cfg["max_length_s"]
+def clip_window(spike: Spike, clip_cfg: dict, moments: list[dict] | None = None
+                ) -> tuple[float, float]:
+    c = clip_window_for(spike.moment, moments or [], clip_cfg)
+    start = spike.peak_ts - c["pre_roll_s"]
+    end = max(spike.end_ts, spike.peak_ts) + c["post_roll_s"]
+    if end - start > c["max_length_s"]:
+        start = end - c["max_length_s"]
+    if end - start < c.get("min_length_s", 0):
+        start = end - c["min_length_s"]
     return start, end
+
+
+def make_detector(name: str, cfg: dict, on_spike=None) -> SpikeDetector:
+    moments = cfg.get("moments") or []
+    return SpikeDetector(name, cfg["detector"], cfg["ranking"]["hype_tokens"], on_spike=on_spike,
+                         classifier=(lambda msgs: classify(msgs, moments)) if moments else None)
+
+
+def build_receipt(sp: Spike, cfg: dict) -> dict:
+    why = f"chat hit {sp.peak_rate} msg/s vs normal {sp.baseline_rate} ({sp.ratio}x, z={sp.z_score})"
+    r = {"why": why, **sp.to_dict()}
+    if sp.moment:
+        r["why"] += f"; looks like: {sp.moment['label']} ({sp.moment['hits']} matching msgs)"
+        r["hook"] = pick_hook(sp.moment, cfg["moments"], cfg["reel"].get("hook_text", ""),
+                              cfg["streamer"], cfg.get("game_name", ""), seed=int(sp.peak_ts))
+        r["safety_review"] = sp.moment.get("safety") == "review"
+    return r
 
 
 def _paths(data_dir: Path, channel: str, clip_id: int) -> tuple[Path, Path, Path]:
@@ -40,7 +62,7 @@ def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
     try:
         if words is None:
             words = transcribe(raw, cfg["reel"].get("transcriber", "none"))
-        render_reel(raw, reel, cfg["reel"], facecam, words)
+        render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"))
         queue.update(clip_id, reel_path=str(reel), status="crafted")
     except Exception as e:
         err = getattr(e, "stderr", b"") or b""
@@ -54,7 +76,7 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
     cfg = channel_settings(settings, channel)
     queue = ClipQueue(data_dir / "queue.db")
     chat = SimulatedChat(channel["name"], minutes=minutes, **channel.get("sim", {}))
-    det = SpikeDetector(channel["name"], cfg["detector"], cfg["ranking"]["hype_tokens"])
+    det = make_detector(channel["name"], cfg)
     rec = DemoRecorder(channel.get("facecam", {"x": 0.7, "y": 0.7, "w": 0.28, "h": 0.28}))
 
     print(f"Simulating {minutes:g} min of chat for '{channel['name']}' "
@@ -67,10 +89,9 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
 
     print(f"Detected {len(det.spikes)} spikes.\n")
     for i, sp in enumerate(det.spikes):
-        start, end = clip_window(sp, cfg["clip"])
+        start, end = clip_window(sp, cfg["clip"], cfg["moments"])
         score = score_spike(sp, cfg["ranking"])
-        receipt = {"why": f"chat hit {sp.peak_rate} msg/s vs normal {sp.baseline_rate} "
-                          f"({sp.ratio}x, z={sp.z_score})", **sp.to_dict()}
+        receipt = build_receipt(sp, cfg)
         cid = queue.add(channel["name"], channel["platform"], start, end, score, receipt)
         raw, _, rpath = _paths(data_dir, channel["name"], cid)
         rpath.parent.mkdir(parents=True, exist_ok=True)
@@ -80,7 +101,7 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
         if render:
             rec.cut(start, end, raw)
             queue.update(cid, raw_path=str(raw))
-            words = fake_words(DEMO_LINES[i % len(DEMO_LINES)], start=cfg["reel"]["hook_seconds"])
+            words = fake_words(DEMO_LINES[i % len(DEMO_LINES)], start=0.6)
             craft_clip(queue, cid, cfg, channel.get("facecam"), words=words)
     return queue
 
@@ -100,11 +121,10 @@ class ChannelWorker:
         self.pending.append(asyncio.get_running_loop().create_task(self._handle(sp)))
 
     async def _handle(self, sp: Spike) -> None:
-        start, end = clip_window(sp, self.cfg["clip"])
+        start, end = clip_window(sp, self.cfg["clip"], self.cfg["moments"])
         await asyncio.sleep(max(0.0, end - time.time() + 3))  # let the buffer catch up
         score = score_spike(sp, self.cfg["ranking"])
-        receipt = {"why": f"chat hit {sp.peak_rate} msg/s vs normal {sp.baseline_rate} "
-                          f"({sp.ratio}x, z={sp.z_score})", **sp.to_dict()}
+        receipt = build_receipt(sp, self.cfg)
         cid = self.queue.add(self.ch["name"], self.ch["platform"], start, end, score, receipt)
         raw, _, rpath = _paths(self.data_dir, self.ch["name"], cid)
         rpath.parent.mkdir(parents=True, exist_ok=True)
@@ -129,8 +149,7 @@ class ChannelWorker:
             self.recorder = LiveRecorder(name, url, self.data_dir, self.cfg["clip"]["quality"],
                                          self.cfg["clip"]["buffer_minutes"])
             self.recorder.start()
-        det = SpikeDetector(name, self.cfg["detector"], self.cfg["ranking"]["hype_tokens"],
-                            on_spike=self._on_spike)
+        det = make_detector(name, self.cfg, on_spike=self._on_spike)
         print(f"[{name}] monitoring {self.ch['platform']} chat")
 
         count = 0
@@ -182,11 +201,15 @@ async def watch_chat(settings: dict, channel: dict) -> None:
         print(f"\n*** SPIKE  peak {sp.peak_rate} msg/s vs normal {sp.baseline_rate} "
               f"({sp.ratio}x, z={sp.z_score})  score={score_spike(sp, cfg['ranking'])}")
         print(f"    top tokens: {sp.top_tokens[:5]}")
-        print(f"    would clip {cfg['clip']['pre_roll_s']}s before the peak to "
-              f"{cfg['clip']['post_roll_s']}s after it ends\n")
+        c = clip_window_for(sp.moment, cfg["moments"], cfg["clip"])
+        if sp.moment:
+            r = build_receipt(sp, cfg)
+            flag = "  [HOLD FOR SAFETY REVIEW]" if r["safety_review"] else ""
+            print(f"    moment: {sp.moment['label']}  hook: \"{r['hook']}\"{flag}")
+        print(f"    would clip {c['pre_roll_s']}s before the peak to "
+              f"{c['post_roll_s']}s after it ends\n")
 
-    det = SpikeDetector(channel["name"], cfg["detector"], cfg["ranking"]["hype_tokens"],
-                        on_spike=show)
+    det = make_detector(channel["name"], cfg, on_spike=show)
     count = 0
     t_start = time.time()
     print(f"Watching {channel['platform']} chat for '{channel['name']}' (Ctrl+C to stop). "

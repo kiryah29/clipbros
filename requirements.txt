@@ -1,4 +1,5 @@
 PyYAML>=6.0
+Pillow>=10.0            # brand overlays (logo, hook card) on reels
 websockets>=12.0        # Twitch chat (IRC over WebSocket)
 aiohttp>=3.9            # YouTube Live Chat API polling
 streamlink>=6.0         # live video capture (real mode only)

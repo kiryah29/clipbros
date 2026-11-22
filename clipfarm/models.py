@@ -28,6 +28,7 @@ class Spike:
     top_tokens: list[tuple[str, int]] = field(default_factory=list)
     sample_messages: list[str] = field(default_factory=list)
     rate_curve: list[float] = field(default_factory=list)  # msgs/s around the spike
+    moment: dict[str, Any] | None = None  # game-profile label, see moments.py
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

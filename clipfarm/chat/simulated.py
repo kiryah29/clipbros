@@ -23,8 +23,10 @@ DEMO_LINES = ["no way he just hit that shot", "chat did you see that",
 class SimulatedChat(ChatSource):
     def __init__(self, channel: str, base_rate: float = 1.5, minutes: float = 20,
                  bursts: list[tuple[float, float, float]] | None = None,
-                 seed: int = 7, realtime: bool = False, start_ts: float | None = None):
+                 seed: int = 7, realtime: bool = False, start_ts: float | None = None,
+                 hype_lines: list[str] | None = None):
         super().__init__(channel)
+        self.hype = HYPE + list(hype_lines or [])   # e.g. game-flavoured chat for demos
         self.base_rate = base_rate
         self.duration = minutes * 60
         self.rng = random.Random(seed)
@@ -54,7 +56,7 @@ class SimulatedChat(ChatSource):
         while off < self.duration:
             rate, hype = self._rate_at(off)
             off += self.rng.expovariate(rate)
-            pool = HYPE if hype and self.rng.random() < 0.8 else NORMAL
+            pool = self.hype if hype and self.rng.random() < 0.8 else NORMAL
             yield ChatMessage(self.channel, self.start_ts + off,
                               f"viewer{self.rng.randint(1, 900)}", self.rng.choice(pool))
 

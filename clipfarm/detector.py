@@ -20,7 +20,8 @@ TOKEN_RE = re.compile(r"\S+")
 
 class SpikeDetector:
     def __init__(self, channel: str, cfg: dict, hype_tokens: Iterable[str] = (),
-                 on_spike: Callable[[Spike], None] | None = None):
+                 on_spike: Callable[[Spike], None] | None = None,
+                 classifier: Callable[[list[str]], dict | None] | None = None):
         d = cfg
         self.channel = channel
         self.bucket = float(d["bucket_seconds"])
@@ -34,6 +35,7 @@ class SpikeDetector:
         self.sustain_n = max(1, round(float(d.get("min_sustain_s", 3)) / self.bucket))
         self.hype = {t.lower() for t in hype_tokens}
         self.on_spike = on_spike
+        self.classifier = classifier
 
         self.mean: float | None = None
         self.var = 0.0
@@ -143,6 +145,7 @@ class SpikeDetector:
             hype_share=round(hype_hits / max(len(o["msgs"]), 1), 3),
             top_tokens=tokens.most_common(8), sample_messages=o["msgs"][:10],
             rate_curve=[round(r, 2) for r in curve],
+            moment=self.classifier(o["msgs"]) if self.classifier else None,
         )
         self.spikes.append(spike)
         if self.on_spike:
@@ -151,8 +154,10 @@ class SpikeDetector:
 
 
 def score_spike(spike: Spike, ranking: dict) -> float:
+    m = spike.moment or {}
     return round(
         ranking["w_z"] * spike.z_score
         + ranking["w_ratio"] * spike.ratio
         + ranking["w_peak"] * spike.peak_rate
-        + ranking["w_hype"] * spike.hype_share, 3)
+        + ranking["w_hype"] * spike.hype_share
+        + ranking.get("w_moment", 0.0) * m.get("share", 0.0) * m.get("weight", 1.0), 3)

@@ -4,7 +4,8 @@ facecam_top layout (top to bottom):
     [ facecam band ]  cropped from the source using the channel's facecam box
     [ gameplay     ]  center crop of the source
     [ backdrop     ]  optional looping filler footage (else gameplay grows)
-Captions/hook/CTA are burned in from an ASS file; optional music is ducked under.
+Brand layer (logo, lime seam line, hook card) is drawn by overlay.py as PNGs;
+word captions/CTA are burned in from an ASS file; optional music is ducked under.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 from .captions import Word, build_ass
+from .overlay import draw_base, draw_hook, font_path, safe_box
 
 
 def probe_duration(path: Path) -> float:
@@ -25,8 +27,12 @@ def _even(x: float) -> int:
     return int(x) // 2 * 2
 
 
+def _ff_path(p: Path) -> str:
+    return str(p.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
 def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
-                words: list[Word]) -> Path:
+                words: list[Word], hook_text: str | None = None) -> Path:
     W, H = cfg["width"], cfg["height"]
     dur = probe_duration(raw)
     backdrop = cfg.get("backdrop")
@@ -56,19 +62,40 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
                      f"crop={W}:{bh},setsar=1[back]")
             stack.append("[back]")
         f.append("".join(stack) + f"vstack=inputs={len(stack)}[stacked]")
-        caption_y = fh + gh - 260 if has_back else fh + int(gh * 0.62)
+        seam_y = fh
+        caption_y = fh + gh - 260 if has_back else int(H * cfg.get("caption_y_ratio", 0.60))
     else:
         # gameplay_only: blurred fill behind a centered 16:9 frame
         f.append("[0:v]split=2[bg][fg]")
         f.append(f"[bg]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=20:2[bgb]")
         f.append(f"[fg]scale={W}:-2[fgs]")
         f.append("[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[stacked]")
+        seam_y = None
         caption_y = int(H * 0.68)
 
+    # brand layer: logo + seam line always, hook card from frame one
+    left, _, right, _ = safe_box(cfg)
+    n_in = 1 + has_back + has_music
+    base_png = draw_base(cfg, seam_y, out.with_name(out.stem + "_base.png"))
+    inputs += ["-loop", "1", "-i", str(base_png)]
+    f.append(f"[stacked][{n_in}:v]overlay=0:0:shortest=1[b1]")
+    last = "[b1]"
+    hook = cfg.get("hook_text") if hook_text is None else hook_text
+    if hook:
+        hook_png = draw_hook(cfg, hook, seam_y or int(H * 0.30),
+                             out.with_name(out.stem + "_hook.png"))
+        inputs += ["-loop", "1", "-i", str(hook_png)]
+        hs = float(cfg.get("hook_seconds") or 0)   # 0 = keep the hook card up the whole clip
+        enable = f":enable='lt(t,{hs})'" if hs > 0 else ""
+        f.append(f"{last}[{n_in + 1}:v]overlay=0:0:shortest=1{enable}[b2]")
+        last = "[b2]"
+
     ass = out.with_suffix(".ass")
-    build_ass(words, dur, cfg, caption_y, ass)
-    ass_arg = str(ass.resolve()).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-    f.append(f"[stacked]ass='{ass_arg}'[v]")
+    build_ass(words, dur, cfg, caption_y, ass, caption_x=(left + right) // 2,
+              max_w=right - left)
+    fp = font_path(cfg)
+    fonts = f":fontsdir='{_ff_path(fp.parent)}'" if fp else ""
+    f.append(f"{last}ass='{_ff_path(ass)}'{fonts}[v]")
 
     if has_music:
         mi = 2 if has_back else 1
