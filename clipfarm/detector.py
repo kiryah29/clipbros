@@ -178,3 +178,26 @@ def score_spike(spike: Spike, weights: dict, trigger: float = 3.0) -> float:
     """Chat-only score (0-100) for a spike, e.g. in `watch` mode where there is no audio."""
     from .signals import score_signals
     return score_signals(chat_values(spike, spike.ratio, trigger), weights)[0]
+
+
+class LagFilter:
+    """Spots chat that arrives late. When the chat connection stalls, Twitch holds the
+    messages and then delivers the whole backlog at once; counted on arrival that burst
+    looks like a huge spike. Each message's own send time (`sent_ts`) shows it is late.
+    The usual delay (network + our clock vs Twitch's) is learned as the median lag, and a
+    message more than `max_lag_s` behind that is late: its bucket is already closed, so
+    it is left out of the pace instead of piling into the current second."""
+
+    def __init__(self, max_lag_s: float = 5.0, keep: int = 300):
+        self.max_lag = float(max_lag_s)
+        self.lags: deque[float] = deque(maxlen=keep)
+
+    def is_late(self, msg: ChatMessage, now: float) -> bool:
+        if msg.sent_ts is None:
+            return False
+        lag = now - msg.sent_ts
+        typical = sorted(self.lags)[len(self.lags) // 2] if self.lags else lag
+        late = lag > typical + self.max_lag
+        if not late:
+            self.lags.append(lag)
+        return late

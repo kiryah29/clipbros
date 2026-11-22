@@ -10,6 +10,7 @@ class ChatMessage:
     ts: float          # unix seconds
     user: str
     text: str
+    sent_ts: float | None = None   # platform's own send time (Twitch tmi-sent-ts), if known
 
 
 @dataclass

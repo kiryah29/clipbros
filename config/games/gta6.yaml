@@ -29,6 +29,9 @@ reel:
   caption_style: clipbros
   hook_seconds: 0           # hook card stays up the whole clip, like the references
   cta_text: ""              # none of the references end on a CTA; a hard cut loops better
+  # GTA shows its own subtitles here (fractions of the frame) for cutscene and NPC lines;
+  # caption words said while they are on screen are game dialogue and get dropped
+  subtitle_box: {x: 0.25, y: 0.80, w: 0.5, h: 0.15}
 
 moments:
   # Crime -> cops show up -> it spirals. Biggest-performing shape in the set

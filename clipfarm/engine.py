@@ -12,8 +12,8 @@ from .chat.simulated import DEMO_LINES, SimulatedChat
 from .config import channel_settings
 from .craft import render_reel
 from .audio import SAMPLE_RATE, AudioTracker, decode_pcm
-from .craft.captions import Word, fake_words, transcribe
-from .detector import SpikeDetector, chat_values, score_spike
+from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
+from .detector import LagFilter, SpikeDetector, chat_values, score_spike
 from .models import Spike
 from .moments import classify, clip_window_for, pick_hook
 from .queue import ClipQueue
@@ -114,13 +114,38 @@ def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTra
         r.update(sp.to_dict())
     if sp and sp.moment:
         r["why"] += f"; looks like: {sp.moment['label']} ({sp.moment['hits']} matching msgs)"
-        r["hook"] = pick_hook(sp.moment, cfg["moments"], cfg["reel"].get("hook_text", ""),
-                              cfg["streamer"], cfg.get("game_name", ""), seed=int(sp.peak_ts))
+        r["hook"] = pick_hook(sp.moment, cfg["moments"], "", cfg["streamer"],
+                              cfg.get("game_name", ""), seed=int(sp.peak_ts))
         r["safety_review"] = sp.moment.get("safety") == "review"
+    if not r.get("hook"):
+        r["hook"] = trigger_hook(r, cfg)
     if speech:
         r["transcript"] = [[w.text, round(w.start, 2), round(w.end, 2)]
                            for w in speech.words_between(start, end)]
     return score, r
+
+
+def trigger_hook(receipt: dict, cfg: dict) -> str:
+    """Hook card text from what made the clip. "WAIT FOR IT..." only when the stream got
+    loud enough to be an audio spike on its own AND chat went well past a normal spike;
+    otherwise the excited phrase, else a line for a loud moment or a chat reaction."""
+    reel, hooks = cfg["reel"], cfg["reel"].get("trigger_hooks") or {}
+    fill = {"streamer": cfg["streamer"], "game": cfg.get("game_name", "")}
+    a, c = receipt.get("audio_ratio", 0.0), receipt.get("chat_ratio", 1.0)
+    need_a = float(reel.get("wait_hook_audio_ratio") or cfg["audio"].get("min_ratio", 6.0))
+    need_c = float(reel.get("wait_hook_chat_ratio", 5.0))
+    if a >= need_a and c >= need_c:
+        return reel.get("hook_text") or "WAIT FOR IT..."
+    phrases = receipt.get("speech", {}).get("phrases") or []
+    if phrases and hooks.get("phrase"):
+        word, _, n = phrases[0].partition(" x")          # "no x3" -> "NO NO NO"
+        said = " ".join([word] * int(n)) if n.isdigit() else phrases[0]
+        return hooks["phrase"].format(phrase=said.upper(), **fill)
+    if (a >= need_a or "audio" in receipt.get("triggers", [])) and hooks.get("audio"):
+        return hooks["audio"].format(**fill)
+    if "chat" in receipt.get("triggers", []) and hooks.get("chat"):
+        return hooks["chat"].format(**fill)
+    return ""
 
 
 def unconfirmed(receipt: dict, audio_cfg: dict) -> str | None:
@@ -158,6 +183,8 @@ def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
             words = [Word(*w) for w in clip.receipt["transcript"]]   # live stream transcript
         if words is None:
             words = transcribe(raw, cfg["reel"].get("transcriber", "none"))
+        if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
+            words = drop_dialogue(words, subtitle_times(raw, box))
         render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"))
         queue.update(clip_id, reel_path=str(reel), status="crafted")
     except Exception as e:
@@ -413,9 +440,13 @@ class ChannelWorker:
             await asyncio.gather(*self.pending, return_exceptions=True)
 
     async def _consume(self) -> None:
-        self.msg_count = 0
+        self.msg_count = self.late_count = 0
+        lag = LagFilter(self.cfg["detector"].get("max_chat_lag_s", 5))
         async for msg in self.source.messages():
             msg.ts = time.time()  # use arrival time on our clock (matches video buffer)
+            if lag.is_late(msg, msg.ts):   # backlog after a chat stall: not a real spike
+                self.late_count += 1
+                continue
             self.det.feed(msg)
             self.msg_count += 1
 
@@ -433,9 +464,10 @@ class ChannelWorker:
                 loud = (f" | loudness {self.audio.trigger.history[-1][1]:.3f} "
                         f"(normal {self.audio.baseline:.3f})"
                         if self.audio and self.audio.trigger.history else "")
+                late = f" | {self.late_count} late msgs ignored (chat stalled)"                     if self.late_count else ""
                 print(f"[{name} {time.strftime('%H:%M:%S')}] {self.msg_count / 10:.2f} msg/s | "
-                      f"normal {base}{loud} | {'SPIKE OPEN' if d.open else 'watching'}")
-                self.msg_count = 0
+                      f"normal {base}{loud} | {'SPIKE OPEN' if d.open else 'watching'}{late}")
+                self.msg_count = self.late_count = 0
             if isinstance(self.recorder, LiveRecorder):
                 self.recorder.prune()
                 if not self.recorder.running:

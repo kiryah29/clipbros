@@ -65,11 +65,12 @@ class SherpaOnnx:
         self.rec = sherpa_onnx.OfflineRecognizer.from_whisper(
             encoder=str(enc), decoder=str(dec), tokens=str(tokens),
             language=cfg.get("language", "en"), num_threads=int(cfg.get("threads", 2)))
+        self.max_tokens = str(cfg.get("max_tokens_per_second", 25))
 
     def transcribe_pcm(self, pcm: bytes, sample_rate: int = SAMPLE_RATE) -> list[Word]:
         s = self.rec.create_stream()
-        try:   # default 6/s truncates fast talkers; much higher just lets tiny.en loop longer
-            s.set_option("max_tokens_per_second", "15")
+        try:   # default 6/s truncates fast talkers (15 still cut xQc off); drop_loops
+            s.set_option("max_tokens_per_second", self.max_tokens)   # trims any loop
         except Exception:
             pass
         s.accept_waveform(sample_rate, [x / 32768 for x in samples(pcm)])
