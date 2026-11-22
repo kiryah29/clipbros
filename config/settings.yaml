@@ -42,6 +42,8 @@ audio:
   warmup_s: 90              # learn the normal loudness first
   baseline_halflife_s: 300
   cooldown_s: 30
+  confirm: true             # audio-only clips also need chat >= confirm_chat_ratio or an excited phrase
+  confirm_chat_ratio: 1.5
   silence_floor: 0.01       # quiet stretches don't drag "normal" below this (RMS 0..1)
   pre_roll_s: 15            # a scream is AT the moment: shorter look-back than chat
   post_roll_s: 6

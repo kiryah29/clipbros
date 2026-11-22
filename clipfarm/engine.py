@@ -92,7 +92,7 @@ def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTra
                    f"({sp.ratio}x, z={sp.z_score})")
     elif chat_ratio > 1.2:
         why.append(f"chat {chat_ratio}x normal")
-    extra: dict = {}
+    extra: dict = {"chat_ratio": chat_ratio}
     if audio:
         a_ratio = audio.ratio_between(start, end)
         values["audio"] = strength(a_ratio, trig)
@@ -121,6 +121,17 @@ def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTra
         r["transcript"] = [[w.text, round(w.start, 2), round(w.end, 2)]
                            for w in speech.words_between(start, end)]
     return score, r
+
+
+def unconfirmed(receipt: dict, audio_cfg: dict) -> str | None:
+    """Why an audio-only clip is dropped, or None to keep it. Loud alone is often just a
+    car crash or game noise; keep it only if chat reacts or the streamer says something."""
+    if not audio_cfg.get("confirm", True) or receipt["triggers"] != ["audio"]:
+        return None
+    need = float(audio_cfg.get("confirm_chat_ratio", 1.5))
+    if receipt.get("chat_ratio", 1.0) >= need or receipt.get("speech", {}).get("phrases"):
+        return None
+    return f"audio only (chat {receipt.get('chat_ratio', 1.0)}x < {need}x, no excited phrase)"
 
 
 def build_receipt(sp: Spike, cfg: dict) -> dict:
@@ -225,6 +236,9 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
           f"-> {len(book.items)} clips.\n")
     for i, m in enumerate(book.items):
         score, receipt = score_moment(m, cfg, det, audio, speech)
+        if why_not := unconfirmed(receipt, cfg["audio"]):
+            print(f"  skipped: {why_not}")
+            continue
         cid = queue.add(channel["name"], channel["platform"], m["start"], m["end"], score, receipt)
         raw, _, rpath = _paths(data_dir, channel["name"], cid)
         rpath.parent.mkdir(parents=True, exist_ok=True)
@@ -285,6 +299,9 @@ class ChannelWorker:
             await asyncio.sleep(1)
         score, receipt = score_moment(m, self.cfg, self.det, self.audio,
                                       self.speech if self.transcriber else None)
+        if why_not := unconfirmed(receipt, self.cfg["audio"]):
+            print(f"[{name}] skipped (score {score}): {why_not}")
+            return
         cid = self.queue.add(name, self.ch["platform"], m["start"], m["end"], score, receipt)
         raw, _, rpath = _paths(self.data_dir, name, cid)
         rpath.parent.mkdir(parents=True, exist_ok=True)

@@ -179,3 +179,14 @@ def test_caption_censor():
     assert censor("ass") == "a**"
     assert censor("class") == "class" and censor("pass") == "pass"
     assert censor("Shit!") == "S***!"
+
+
+def test_audio_only_clip_needs_second_signal():
+    from clipfarm.engine import unconfirmed
+    cfg = {"confirm": True, "confirm_chat_ratio": 1.5}
+    loud = {"triggers": ["audio"], "chat_ratio": 1.1, "speech": {"phrases": []}}
+    assert unconfirmed(loud, cfg)
+    assert unconfirmed({**loud, "chat_ratio": 2.0}, cfg) is None
+    assert unconfirmed({**loud, "speech": {"phrases": ["no way"]}}, cfg) is None
+    assert unconfirmed({**loud, "triggers": ["audio", "chat"]}, cfg) is None
+    assert unconfirmed(loud, {"confirm": False}) is None
