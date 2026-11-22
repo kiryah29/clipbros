@@ -74,8 +74,7 @@ class SherpaOnnx:
             pass
         s.accept_waveform(sample_rate, [x / 32768 for x in samples(pcm)])
         self.rec.decode_stream(s)
-        dur = len(pcm) / 2 / sample_rate
-        return spread_words(s.result.text, 0.0, dur)
+        return voiced_words(s.result.text, pcm, sample_rate)
 
 
 def _pick(d: Path, part: str) -> Path | None:
@@ -90,6 +89,36 @@ def spread_words(text: str, start: float, end: float) -> list[Word]:
         return []
     step = (end - start) / len(words)
     return [Word(w, start + i * step, start + (i + 1) * step) for i, w in enumerate(words)]
+
+
+def voiced_words(text: str, pcm: bytes, sample_rate: int = SAMPLE_RATE,
+                 frame_s: float = 0.02) -> list[Word]:
+    """Words placed on the loud (voiced) parts of the chunk, longer words taking longer,
+    for engines without word timings. Spreading evenly over the whole chunk put words
+    seconds away from when they were said whenever the chunk had a pause."""
+    words = text.split()
+    dur = len(pcm) / 2 / sample_rate
+    if not words:
+        return []
+    x = samples(pcm)
+    n = int(sample_rate * frame_s)
+    rms = []
+    for i in range(0, len(x) - n + 1, n):     # first difference = cheap high-pass (less rumble)
+        f = x[i:i + n]
+        rms.append((sum((b - a) ** 2 for a, b in zip(f, f[1:])) / n) ** 0.5)
+    if len(rms) < 5:
+        return spread_words(text, 0.0, dur)
+    srt = sorted(rms)
+    lo, hi = srt[int(0.30 * (len(srt) - 1))], srt[int(0.95 * (len(srt) - 1))]
+    voiced = [i for i, r in enumerate(rms) if r > lo + 0.3 * (hi - lo)]
+    if len(voiced) < 3:
+        return spread_words(text, 0.0, dur)
+    weight = [len(_norm(w)) + 2 for w in words]
+    total, acc, t = sum(weight), 0, [voiced[0] * frame_s]
+    for wt in weight:
+        acc += wt
+        t.append(voiced[round(acc / total * (len(voiced) - 1))] * frame_s)
+    return [Word(w, t[i], max(t[i + 1], t[i] + 0.08)) for i, w in enumerate(words)]
 
 
 def _norm(w: str) -> str:

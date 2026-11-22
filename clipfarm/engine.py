@@ -40,7 +40,7 @@ def clip_window(spike: Spike, clip_cfg: dict, moments: list[dict] | None = None
 
 def audio_window(ev: dict, audio_cfg: dict, clip_cfg: dict) -> tuple[float, float]:
     return _fit(ev["peak_ts"] - float(audio_cfg.get("pre_roll_s", 15)),
-                max(ev["end_ts"], ev["peak_ts"]) + float(audio_cfg.get("post_roll_s", 6)),
+                max(ev["end_ts"], ev["peak_ts"]) + float(audio_cfg.get("post_roll_s", 12)),
                 clip_cfg)
 
 

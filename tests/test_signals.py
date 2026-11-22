@@ -190,3 +190,15 @@ def test_audio_only_clip_needs_second_signal():
     assert unconfirmed({**loud, "speech": {"phrases": ["no way"]}}, cfg) is None
     assert unconfirmed({**loud, "triggers": ["audio", "chat"]}, cfg) is None
     assert unconfirmed(loud, {"confirm": False}) is None
+
+
+def test_voiced_words_land_on_the_speech():
+    import array
+    import math
+    from clipfarm.speech import voiced_words
+    sr = 16000      # 2 s silence, then 1 s of a loud tone standing in for a shout
+    pcm = array.array("h", [0] * (2 * sr) +
+                      [int(8000 * math.sin(i * 0.3)) for i in range(sr)]).tobytes()
+    words = voiced_words("what the hell", pcm, sr)
+    assert [w.text for w in words] == ["what", "the", "hell"]
+    assert all(w.start >= 1.9 for w in words)

@@ -46,7 +46,7 @@ audio:
   confirm_chat_ratio: 1.5
   silence_floor: 0.01       # quiet stretches don't drag "normal" below this (RMS 0..1)
   pre_roll_s: 15            # a scream is AT the moment: shorter look-back than chat
-  post_roll_s: 6
+  post_roll_s: 12           # keep the reaction after the scream (6 s cut off "whoa whoa")
 
 speech:
   engine: auto              # auto | faster_whisper | sherpa_onnx | none (see README)
