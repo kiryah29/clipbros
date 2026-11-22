@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import brand
+
 
 @dataclass
 class Word:
@@ -38,8 +40,9 @@ STYLES = {
     "pop":   ("&H00FFFFFF", "&H0000E5FF", "&H00000000", "&H00000000", 1, 115),
     "boxed": ("&H00FFFFFF", "&H00FFFFFF", "&H00000000", "&H000000FF", 3, 100),
     "clean": ("&H00FFFFFF", "&H00FFFFFF", "&H64000000", "&H00000000", 1, 100),
-    # ClipBros mockup: bold white caps, the spoken word in lime (#C8F032), dark outline
-    "clipbros": ("&H00FFFFFF", "&H0032F0C8", "&H00101010", "&H80000000", 1, 104),
+    # ClipBros brand kit: Inter 800 caps in Paper, Ink outline, the spoken word in Clip Lime
+    "clipbros": (brand.ass_colour(brand.PAPER), brand.ass_colour(brand.LIME),
+                 brand.ass_colour(brand.INK), brand.ass_colour(brand.INK, 0x80), 1, 100),
 }
 
 
@@ -60,16 +63,19 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
     cx = caption_x if caption_x is not None else W // 2
     max_w = max_w or W - 120
     prim, hi, outl, back, border, scale = STYLES.get(cfg["caption_style"], STYLES["pop"])
-    font = cfg.get("caption_font", "Inter ExtraBold")
+    font = cfg.get("caption_font", brand.ONCLIP_FONT_NAME)
     max_fs = int(cfg.get("caption_size", 84))
+    outline = int(cfg.get("caption_outline", 5))
+    chunk = int(cfg.get("caption_words", chunk))
+    ink, paper = brand.ass_colour(brand.INK), brand.ass_colour(brand.PAPER)   # CTA: Ink on Paper
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
         "WrapStyle: 2", "", "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
         "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Caption,{font},{max_fs},{prim},{hi},{outl},{back},1,0,0,0,100,100,0,0,{border},6,3,5,60,60,0,1",
-        f"Style: CTA,{font},64,&H00111111,&H00111111,&H00EAF1F3,&H00EAF1F3,1,0,0,0,100,100,0,0,3,20,0,2,80,80,420,1",
+        f"Style: Caption,{font},{max_fs},{prim},{hi},{outl},{back},1,0,0,0,100,100,0,0,{border},{outline},2,5,60,60,0,1",
+        f"Style: CTA,{font},64,{ink},{ink},{paper},{paper},1,0,0,0,100,100,0,0,3,20,0,2,80,80,420,1",
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
