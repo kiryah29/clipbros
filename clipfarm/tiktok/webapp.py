@@ -173,7 +173,7 @@ class App:
    <label class='opt'><input type='checkbox' name='branded'> Branded content (promoting a third party)</label>
    <p class='mut' id='bnote'></p></div></div>
  <p class='mut' id='declare'>By posting, you agree to TikTok's <a href='https://www.tiktok.com/legal/page/global/music-usage-confirmation/en' target='_blank' rel='noopener'>Music Usage Confirmation</a>.</p>
- <label class='opt'><input type='checkbox' id='consent' required> I have reviewed this video and agree to post it to my TikTok account.</label>
+ <label class='opt'><input type='checkbox' id='consent' name='consent' required> I have reviewed this video and agree to post it to my TikTok account.</label>
  <button id='go' disabled>Post to TikTok</button></form>
 <script>
 const f=document.getElementById('f'),go=document.getElementById('go');
