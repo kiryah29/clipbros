@@ -126,6 +126,7 @@ def test_review_page_enforces_ux(tmp_path, monkeypatch):
         return review, no_consent, ok
 
     review, no_consent, ok = asyncio.run(run())
+    assert "name='consent'" in review  # the checkbox must be submitted with the form
     assert "@bob" in review and "selected disabled" in review  # no default privacy
     assert "Music Usage Confirmation" in review and "turned off in your TikTok settings" in review
     assert "Not posted" in no_consent and "Upload sent" in ok
