@@ -215,3 +215,24 @@ Until TikTok audits the app, posts can only be **Only me** (private). The review
 follows TikTok's UX rules: account shown, no default privacy choice, interaction toggles
 off, commercial-content disclosure, consent declaration, and an explicit Post click.
 The token is stored in `data/tiktok_token.json` (gitignored).
+
+## Control page (test runs from another computer)
+
+The `tiktok-app` web app also has a password-protected control page at `/control`.
+Someone with the shared password can start a test run on a Twitch channel (1 to 120
+minutes, game profile optional), see whether it is live and how many clips it made, stop it,
+and watch, download, approve or reject the reels at `/clips`. Nothing is posted.
+
+- At most 2 runs at once; up to 5 more wait in line. Each run has its own folder
+  `data/control/<run id>/` (queue.db, clips, `run.log`), so your own queue is untouched.
+- Stop kills the run and its streamlink/ffmpeg; runs also die when the app stops.
+- Run folders are deleted `CONTROL_KEEP_DAYS` days after they end (default 3).
+- Public without a password: `/`, terms, privacy, the TikTok verification files and `/callback`.
+
+`.env` settings:
+
+| Setting | What it does |
+|---|---|
+| `CONTROL_PASSWORD_HASH` | the shared password, hashed. Make it with `python -m clipfarm control-password`. Without it nobody can sign in. |
+| `CONTROL_KEEP_DAYS` | days to keep finished runs (default 3) |
+| `CONTROL_ALLOW_POSTING` | set to `1` to turn on the TikTok review/post pages (`/tiktok`). Off by default, also for you. |

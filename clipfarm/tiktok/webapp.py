@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import os
 import secrets
 from urllib.parse import urlparse
@@ -17,6 +18,7 @@ import aiohttp
 from aiohttp import web
 
 from .. import brand
+from ..control import COOKIE, ControlPages, RunManager, Sessions, auth_middleware
 from ..queue import ClipQueue
 from .api import Config, TikTokClient, TikTokError, Token, TokenStore, authorize_url
 
@@ -25,20 +27,21 @@ CSS = brand.WEB_CSS + """
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.mut{color:var(--mut);font-size:.9rem}
 button,.btn{background:var(--acc);color:var(--on-acc);border:0;border-radius:10px;padding:10px 16px;font:600 1rem Inter,system-ui,sans-serif;cursor:pointer;text-decoration:none;display:inline-block}
 button[disabled]{opacity:.45;cursor:not-allowed}.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
-input[type=text],select,textarea{width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
+input[type=text],input[type=password],input[type=number],select,textarea{width:100%;box-sizing:border-box;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
 video{width:100%;max-height:420px;border-radius:10px;background:#000}img.av{width:44px;height:44px;border-radius:50%}
 label.opt{display:block;margin:6px 0}.err{color:#FF6B6B}.ok{color:var(--acc)}
 """
 
 
-def page(title: str, body: str) -> web.Response:
+def page(title: str, body: str, status: int = 200) -> web.Response:
     doc = (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
            f"<meta name='viewport' content='width=device-width,initial-scale=1'><title>{html.escape(title)}</title>"
            f"{brand.FONTS_LINK}<style>{CSS}</style></head><body>"
            f"<header>{brand.logo_html().replace('{home}', '/')}<span class='label'>Clip bros app</span></header>{body}"
-           f"<p class='mut'><a href='/'>Clips</a> &middot; <a href='{LEGAL}terms.html'>Terms</a> &middot; "
+           f"<p class='mut'><a href='/control'>Control</a> &middot; <a href='/clips'>Clips</a> &middot; "
+           f"<a href='{LEGAL}terms.html'>Terms</a> &middot; "
            f"<a href='{LEGAL}privacy.html'>Privacy</a></p></body></html>")
-    return web.Response(text=doc, content_type="text/html")
+    return web.Response(text=doc, content_type="text/html", status=status)
 
 
 LEGAL = "/"
@@ -151,11 +154,11 @@ class App:
         except (TikTokError, KeyError) as ex:
             return page("Login failed", f"<p class='err'>{e(str(ex))}</p>")
         self.store.save(tok)
-        raise web.HTTPFound("/")
+        raise web.HTTPFound("/tiktok")
 
     async def logout(self, request: web.Request) -> web.Response:
         self.store.clear()
-        raise web.HTTPFound("/")
+        raise web.HTTPFound("/tiktok")
 
     async def static_doc(self, request: web.Request) -> web.StreamResponse:
         """Serve the terms/privacy/home pages and TikTok verification files from docs/ on the app's own domain."""
@@ -273,25 +276,45 @@ async function poll(){{const r=await fetch('/status/{e(pid)}');const j=await r.j
         return web.json_response({"status": data.get("status"), "reason": data.get("fail_reason")})
 
 
-def build_app(cfg: Config, db_path: Path, token_path: Path) -> web.Application:
+def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str | None = None,
+              allow_posting: bool = False, control_dir: Path | None = None, keep_days: float = 3) -> web.Application:
+    """Public: home, terms, privacy, TikTok files, the OAuth callback, sign-in. Everything else needs
+    the shared password. The TikTok posting pages exist only when the owner sets allow_posting."""
     app_state = App(cfg, ClipQueue(db_path), TokenStore(token_path))
-    app = web.Application()
+    sessions = Sessions()
+    runs = RunManager(control_dir or db_path.parent / "control", keep_days)
+    pages = ControlPages(runs, sessions, password_hash, page)
+    redirect_path = urlparse(cfg.redirect_uri).path or "/callback"
+    public = re.compile(r"^/(|index\.html|terms\.html|privacy\.html|tiktok[A-Za-z0-9]+\.txt|signin)$")
+    app = web.Application(middlewares=[auth_middleware(sessions, lambda path: bool(public.match(path))
+                                                       or path == redirect_path)])
+
+    async def home(request: web.Request) -> web.StreamResponse:
+        if sessions.valid(request.cookies.get(COOKIE)):
+            raise web.HTTPFound("/control")
+        return web.FileResponse(DOCS / "index.html")
 
     async def on_start(_: web.Application) -> None:
         app_state.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600))
 
     async def on_stop(_: web.Application) -> None:
         await app_state.http.close()
+        for rid in list(runs.procs):   # don't leave test runs behind when the app stops
+            await runs.stop(rid)
 
     app.on_startup.append(on_start)
     app.on_cleanup.append(on_stop)
-    redirect_path = urlparse(cfg.redirect_uri).path or "/callback"
     app.add_routes([
-        web.get("/", app_state.index), web.get("/login", app_state.login),
-        web.get(redirect_path, app_state.callback), web.post("/logout", app_state.logout),
-        web.get("/{name:(?:index|terms|privacy)\\.html}", app_state.static_doc),
-        web.get("/{name:tiktok[A-Za-z0-9]+\\.txt}", app_state.static_doc),
-        web.get("/video/{id:\\d+}", app_state.video), web.get("/clip/{id:\\d+}", app_state.review),
-        web.post("/clip/{id:\\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
+        web.get("/", home), web.get(redirect_path, app_state.callback),
+        web.get(r"/{name:(?:index|terms|privacy)\.html}", app_state.static_doc),
+        web.get(r"/{name:tiktok[A-Za-z0-9]+\.txt}", app_state.static_doc),
+        *pages.routes(),
     ])
+    if allow_posting:   # owner-only switch (CONTROL_ALLOW_POSTING=1 in .env)
+        app.add_routes([
+            web.get("/tiktok", app_state.index), web.get("/login", app_state.login),
+            web.post("/logout", app_state.logout),
+            web.get(r"/video/{id:\d+}", app_state.video), web.get(r"/clip/{id:\d+}", app_state.review),
+            web.post(r"/clip/{id:\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
+        ])
     return app

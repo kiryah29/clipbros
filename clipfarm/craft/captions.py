@@ -3,6 +3,7 @@
 The hook card is drawn separately as a brand overlay (see overlay.py)."""
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +61,76 @@ def _t(s: float) -> str:
     return f"{int(h)}:{int(m):02d}:{sec:05.2f}"
 
 
+# word roots masked anywhere in a word ("fucking" -> "f******"), and whole words only
+CENSOR_ROOTS = ["fuck", "shit", "bitch", "cunt", "nigg", "pussy", "whore", "slut", "fag",
+                "dick", "cock", "asshole", "bastard", "retard"]
+CENSOR_WORDS = ["ass", "hoe", "hoes", "damn"]
+
+
+def censor(word: str, roots=CENSOR_ROOTS, whole=CENSOR_WORDS) -> str:
+    """Keep the first letter and punctuation, star the rest: "FUCKING," -> "F******,"."""
+    letters = "".join(c for c in word.lower() if c.isalpha())
+    if not letters or not (letters in whole or any(r in letters for r in roots)):
+        return word
+    seen, out = False, []
+    for c in word:
+        out.append(c if not c.isalpha() or not seen else "*")
+        seen = seen or c.isalpha()
+    return "".join(out)
+
+
+def group_words(words: list[Word], size: int, gap_s: float) -> list[list[Word]]:
+    """Caption lines of up to `size` words; a pause longer than `gap_s` ends a line."""
+    groups: list[list[Word]] = []
+    for w in words:
+        if groups and len(groups[-1]) < size and w.start - groups[-1][-1].end <= gap_s:
+            groups[-1].append(w)
+        else:
+            groups.append([w])
+    return groups
+
+
+def subtitle_times(media: Path, box: dict, fps: float = 2, width: int = 480,
+                   height: int = 80) -> list[float]:
+    """Seconds (in the clip) where the game shows its own subtitles inside `box`
+    (fractions of the frame): bright text strokes on a dark background. GTA cutscene and
+    NPC lines come with subtitles, so the speech model's transcript of them is game
+    dialogue, not the streamer."""
+    vf = (f"fps={fps},crop=iw*{box['w']}:ih*{box['h']}:iw*{box['x']}:ih*{box['y']},"
+          f"scale={width}:{height},format=gray")
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(media), "-vf", vf,
+                        "-f", "rawvideo", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if not r.stdout:
+        return []
+    n = width * height
+    times = []
+    for k in range(len(r.stdout) // n):
+        if looks_like_subtitle(r.stdout[k * n:(k + 1) * n], width):
+            times.append(k / fps)
+    return times
+
+
+def looks_like_subtitle(frame: bytes, width: int, bright: int = 170, dark: int = 80,
+                        reach: int = 3) -> bool:
+    """Most bright pixels have dark pixels just left or right of them (thin text strokes).
+    Measured on GTA 6 clips: subtitle frames 450-1100 such pixels at >85 % of all bright
+    ones; gameplay (headlights, signs, sky) well under 40 %."""
+    lit = edge = 0
+    for r in range(len(frame) // width):
+        row = frame[r * width:(r + 1) * width]
+        for c in range(reach, width - reach):
+            if row[c] > bright:
+                lit += 1
+                if min(row[c - reach], row[c + reach]) < dark:
+                    edge += 1
+    return edge >= 150 and edge >= 0.6 * lit
+
+
+def drop_dialogue(words: list[Word], times: list[float], pad: float = 0.5) -> list[Word]:
+    """Words said while game subtitles were on screen are dropped."""
+    return [w for w in words if not any(w.start - pad <= t <= w.end + pad for t in times)]
+
+
 def _esc(s: str) -> str:
     return s.replace("\\", "").replace("{", "(").replace("}", ")")
 
@@ -74,6 +145,10 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
     max_fs = int(cfg.get("caption_size", 84))
     outline = int(cfg.get("caption_outline", 5))
     chunk = int(cfg.get("caption_words", chunk))
+    if cfg.get("caption_censor", True):   # TikTok limits reach for on-screen swearing
+        roots = cfg.get("censor_roots", CENSOR_ROOTS)
+        whole = cfg.get("censor_words", CENSOR_WORDS)
+        words = [Word(censor(w.text, roots, whole), w.start, w.end) for w in words]
     ink, paper = brand.ass_colour(brand.INK), brand.ass_colour(brand.PAPER)   # CTA: Ink on Paper
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
@@ -86,11 +161,15 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
-    # captions: show `chunk` words at a time, active word highlighted
-    for i in range(0, len(words), chunk):
-        group = words[i:i + chunk]
+    # captions: show `chunk` words at a time, active word highlighted. A pause starts a
+    # new line and a word stays up at most `caption_max_word_s`, so a line never sits on
+    # screen through a silence (one stayed up 12 s).
+    gap = float(cfg.get("caption_gap_s", 1.0))
+    max_word = float(cfg.get("caption_max_word_s", 1.5))
+    for group in group_words(words, chunk, gap):
         for j, w in enumerate(group):
             end = group[j + 1].start if j + 1 < len(group) else w.end
+            end = min(end, w.start + max_word)
             parts = []
             for k, g in enumerate(group):
                 txt = _esc(g.text.upper())

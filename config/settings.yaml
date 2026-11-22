@@ -11,6 +11,8 @@ detector:
   cooldown_s: 45            # no new spike within this window after one ends
   smoothing_buckets: 3      # rolling mean over N buckets to kill single-bucket noise
   min_sustain_s: 3          # rate must stay hot this long before a spike opens
+  max_chat_lag_s: 5         # chat arriving this much later than usual (a stalled connection
+                            # delivering its backlog) is left out, so it can't fake a spike
 
 clip:
   pre_roll_s: 20            # chat reacts AFTER the moment, so look back
@@ -37,25 +39,31 @@ signals:
 
 audio:
   enabled: true
-  min_ratio: 3.0            # loudness 3x the streamer's normal (about +10 dB) opens a clip
+  min_ratio: 6.0            # loudness 6x the streamer's normal (about +16 dB) opens a clip; 3x fired 30 times in 30 min
+                            # streams where the game is loud vs the voice (xQc, CaseOh peak ~3x)
+                            # need a per-channel override in channels.yaml: audio: {min_ratio: 3.5}
   min_sustain_s: 1          # ...for at least this long
   warmup_s: 90              # learn the normal loudness first
   baseline_halflife_s: 300
   cooldown_s: 30
+  confirm: true             # audio-only clips also need chat >= confirm_chat_ratio or an excited phrase
+  confirm_chat_ratio: 1.5
   silence_floor: 0.01       # quiet stretches don't drag "normal" below this (RMS 0..1)
   pre_roll_s: 15            # a scream is AT the moment: shorter look-back than chat
-  post_roll_s: 6
+  post_roll_s: 12           # keep the reaction after the scream (6 s cut off "whoa whoa")
 
 speech:
   engine: auto              # auto | faster_whisper | sherpa_onnx | none (see README)
   whisper_model: base.en    # faster_whisper model size
-  sherpa_model_dir: models/sherpa-onnx-whisper-tiny.en   # python -m clipfarm setup-speech
+  sherpa_model_dir: models/sherpa-onnx-whisper-base.en   # python -m clipfarm setup-speech [--model tiny.en]
   language: en
   chunk_s: 4                # transcribe the stream in chunks this long
   max_backlog: 6            # if the PC falls behind, drop the oldest chunks
   max_wait_s: 30            # wait this long for the transcript before scoring a clip
   phrase_target: 3          # this many excited phrases in the clip = full phrase points
   repeat_words: 3           # "no no no" counts as one excited phrase
+  max_words_per_s: 6        # pace above this is a transcription glitch, capped
+  max_tokens_per_second: 25 # sherpa decode cap; 15 cut fast talkers off mid-sentence
   keywords: ["no way", "oh my god", "oh my gosh", "let's go", "lets go", "what the",
              "what the hell", "what the fuck", "holy", "are you kidding", "oh no", "yo yo",
              "clip that", "clip it", "wtf", "insane", "i'm dead", "get out",
@@ -76,6 +84,7 @@ reel:
   caption_words: 4          # words on screen at once (brand kit shows 4)
   caption_outline: 5        # Ink outline px around Paper caption text
   caption_font: "Inter ExtraBold"   # bundled in assets/fonts
+  caption_censor: true      # star out swear words in captions (word list: craft/captions.py)
   font_file: null           # override the brand font (default assets/fonts/Inter-ExtraBold.otf)
   # brand layer (see clipfarm/craft/overlay.py; palette from the brand kit in clipfarm/brand.py)
   accent_color: "#C8F03C"   # Clip Lime: seam line + highlighted caption word
@@ -86,7 +95,16 @@ reel:
   logo: null                # null = brand-kit lockup drawn from code; or a PNG used as-is
   # keep-clear zones (px) for TikTok UI: side buttons on the right, caption/sound bar at the bottom
   safe_zone: {left: 62, top: 112, right: 124, bottom: 320}
-  hook_text: "WAIT FOR IT..."   # fallback; game profiles pick a hook per moment
+  # Hook card: a game-profile moment's own hook first. "WAIT FOR IT..." only when audio
+  # reaches the channel's audio spike level (audio.min_ratio) AND chat is at least
+  # wait_hook_chat_ratio x normal (2x the chat trigger). Otherwise trigger_hooks.
+  hook_text: "WAIT FOR IT..."
+  wait_hook_audio_ratio: null   # null = the channel's audio.min_ratio
+  wait_hook_chat_ratio: 5.0
+  trigger_hooks:
+    phrase: '{streamer}: "{phrase}"'          # the excited phrase the streamer said
+    audio: "{streamer} was NOT ready for this"
+    chat: "Chat could NOT believe this"
   hook_seconds: 0           # 0 = hook card stays up the whole clip
   cta_text: "Follow for more clips"
   cta_seconds: 2.5

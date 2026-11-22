@@ -35,6 +35,7 @@ class TwitchChat(ChatSource):
                 async with websockets.connect(WS_URL, ping_interval=None) as ws:
                     await ws.send(f"PASS {token if token.startswith('oauth:') or token == 'SCHMOOPIIE' else 'oauth:' + token}")
                     await ws.send(f"NICK {nick}")
+                    await ws.send("CAP REQ :twitch.tv/tags")   # tmi-sent-ts: when Twitch got it
                     await ws.send(f"JOIN #{self.channel}")
                     backoff = 1
                     async for raw in ws:
@@ -53,13 +54,21 @@ class TwitchChat(ChatSource):
                 backoff = min(backoff * 2, 60)
 
     def _parse(self, line: str) -> ChatMessage | None:
-        # :user!user@user.tmi.twitch.tv PRIVMSG #chan :text
+        # [@k=v;k=v ]:user!user@user.tmi.twitch.tv PRIVMSG #chan :text
         if " PRIVMSG #" not in line:
             return None
+        tags = {}
+        if line.startswith("@"):
+            raw_tags, line = line[1:].split(" ", 1)
+            tags = dict(t.split("=", 1) for t in raw_tags.split(";") if "=" in t)
         try:
             prefix, rest = line[1:].split(" PRIVMSG ", 1)
             text = rest.split(" :", 1)[1]
             user = prefix.split("!", 1)[0]
         except (IndexError, ValueError):
             return None
-        return ChatMessage(self.channel, time.time(), user, text)
+        try:
+            sent = int(tags["tmi-sent-ts"]) / 1000
+        except (KeyError, ValueError):
+            sent = None
+        return ChatMessage(self.channel, time.time(), user, text, sent)

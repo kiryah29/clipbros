@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 from aiohttp import web
 
+from clipfarm.control import hash_password
 from clipfarm.queue import ClipQueue
 from clipfarm.tiktok import api
 from clipfarm.tiktok.webapp import build_app
@@ -109,13 +110,15 @@ def test_review_page_enforces_ux(tmp_path, monkeypatch):
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
         monkeypatch.setattr(api, "API", f"http://127.0.0.1:{port}")
-        app = build_app(CFG, tmp_path / "q.db", tokfile)
+        app = build_app(CFG, tmp_path / "q.db", tokfile, password_hash=hash_password("pw", 1000),
+                        allow_posting=True)
         r2 = web.AppRunner(app)
         await r2.setup()
         s2 = web.TCPSite(r2, "127.0.0.1", 0)
         await s2.start()
         p2 = s2._server.sockets[0].getsockname()[1]
-        async with aiohttp.ClientSession() as s:
+        async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as s:
+            await s.post(f"http://127.0.0.1:{p2}/signin", data={"password": "pw"})
             review = await (await s.get(f"http://127.0.0.1:{p2}/clip/{cid}")).text()
             no_consent = await (await s.post(f"http://127.0.0.1:{p2}/clip/{cid}/post",
                                              data={"title": "t", "privacy": "SELF_ONLY"})).text()
@@ -149,7 +152,7 @@ def test_serves_legal_pages_and_verification_files(tmp_path):
         async with aiohttp.ClientSession() as s:
             for path in ("/terms.html", "/privacy.html", "/index.html", "/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt",
                          "/tiktokNope.txt", "/..%2FREADME.md", "/tiktok..%2f..%2fREADME.txt"):
-                r = await s.get(f"http://127.0.0.1:{port}{path}")
+                r = await s.get(f"http://127.0.0.1:{port}{path}", allow_redirects=False)
                 out[path] = (r.status, (await r.text())[:80])
         await runner.cleanup()
         return out
@@ -160,7 +163,8 @@ def test_serves_legal_pages_and_verification_files(tmp_path):
     assert out["/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt"][0] == 200
     assert "tiktok-developers-site-verification=" in out["/tiktokMCbyaXKMPCaRybGqBwI6Uulk30HpaWTS.txt"][1]
     assert out["/tiktokNope.txt"][0] == 404
-    assert out["/..%2FREADME.md"][0] == 404 and out["/tiktok..%2f..%2fREADME.txt"][0] == 404
+    # not public: sent to sign-in (302), never served
+    assert out["/..%2FREADME.md"][0] in (302, 404) and out["/tiktok..%2f..%2fREADME.txt"][0] in (302, 404)
 
 
 def test_friendly_error_for_unaudited_private_rule():
