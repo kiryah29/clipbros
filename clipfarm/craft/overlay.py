@@ -113,7 +113,8 @@ def draw_hook(cfg: dict, text: str, center_y: int, out: Path) -> Path:
     text = strip_emoji(text)
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    card_w = int((right - left) * 0.90)
+    cx = W // 2   # centred on screen (the safe box is lopsided), still clear of the side buttons
+    card_w = min(int((right - left) * 0.90), 2 * min(right - cx, cx - left))
     pad_x, pad_y = 44, 30
     size = 68
     while True:  # shrink until it fits in 3 lines
@@ -124,7 +125,6 @@ def draw_hook(cfg: dict, text: str, center_y: int, out: Path) -> Path:
         size -= 4
     line_h = int(size * 1.18)
     card_h = line_h * len(lines) + 2 * pad_y
-    cx = (left + right) // 2
     x0, y0 = cx - card_w // 2, max(top, center_y - card_h // 2)
     # soft shadow, then card
     d.rounded_rectangle([x0, y0 + 6, x0 + card_w, y0 + card_h + 6], radius=20,
