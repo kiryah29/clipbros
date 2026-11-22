@@ -44,7 +44,7 @@ class SpikeDetector:
         self.cur_count = 0
         self.cur_msgs: list[str] = []
         self.recent = deque(maxlen=self.smooth_n)
-        self.history = deque(maxlen=int(120 / self.bucket))   # (ts, rate) for receipts
+        self.history = deque(maxlen=int(3600 / self.bucket))  # (ts, rate) for receipts/scoring
         self.open: dict | None = None
         self.candidate: dict | None = None
         self.last_end = -math.inf
@@ -153,11 +153,28 @@ class SpikeDetector:
         return spike
 
 
-def score_spike(spike: Spike, ranking: dict) -> float:
-    m = spike.moment or {}
-    return round(
-        ranking["w_z"] * spike.z_score
-        + ranking["w_ratio"] * spike.ratio
-        + ranking["w_peak"] * spike.peak_rate
-        + ranking["w_hype"] * spike.hype_share
-        + ranking.get("w_moment", 0.0) * m.get("share", 0.0) * m.get("weight", 1.0), 3)
+    def ratio_between(self, start: float, end: float) -> float:
+        """Peak chat rate inside [start, end] vs the learned normal pace (1.0 if unknown)."""
+        rates = [r for t, r in self.history if start <= t <= end]
+        if not rates or not self.mean:
+            return 1.0
+        return round(max(rates) / max(self.mean, 0.1), 2)
+
+
+def chat_values(spike: Spike | None, chat_ratio: float, trigger: float = 3.0) -> dict:
+    """chat_speed / chat_words / game_events strengths (0..1) for signals.score_signals."""
+    from .signals import strength
+    m = (spike.moment if spike else None) or {}
+    return {
+        "chat_speed": strength(spike.ratio if spike else chat_ratio, trigger),
+        # half the spike's messages being hype words (KEKW, LUL, 💀...) = full points
+        "chat_words": round(min(1.0, 2 * spike.hype_share), 3) if spike else 0.0,
+        # game-profile moment: matching share x weight of 0.4 or more = full points
+        "game_events": round(min(1.0, m.get("share", 0.0) * m.get("weight", 1.0) / 0.4), 3),
+    }
+
+
+def score_spike(spike: Spike, weights: dict, trigger: float = 3.0) -> float:
+    """Chat-only score (0-100) for a spike, e.g. in `watch` mode where there is no audio."""
+    from .signals import score_signals
+    return score_signals(chat_values(spike, spike.ratio, trigger), weights)[0]

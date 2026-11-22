@@ -45,7 +45,7 @@ def test_baseline_adapts_to_busier_channel():
 def test_bigger_burst_scores_higher_and_receipt_filled():
     chat = SimulatedChat("t", minutes=10, bursts=[(200, 10, 4), (450, 10, 12)], start_ts=0)
     small, big = run(chat).spikes
-    assert score_spike(big, S["ranking"]) > score_spike(small, S["ranking"])
+    assert score_spike(big, S["signals"]["weights"]) > score_spike(small, S["signals"]["weights"])
     assert big.hype_share > 0.3 and big.top_tokens and big.rate_curve
 
 

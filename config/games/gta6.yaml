@@ -22,7 +22,6 @@ clip:
   min_length_s: 20
 
 ranking:
-  w_moment: 4.0             # bonus = w_moment * moment share * moment weight
   hype_tokens: ["LUL", "KEKW", "OMEGALUL", "LMAO", "LMFAO", "W", "CLIP", "NAHH",
                 "BRO", "💀", "😭", "😂", "🔥", "WTF", "YOOO"]
 

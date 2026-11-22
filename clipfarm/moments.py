@@ -3,7 +3,7 @@
 A game profile (config/games/<game>.yaml) lists moment types, each with the
 chat words viewers type when it happens. When a spike closes, its messages are
 matched against those words. The best match:
-  - adds a ranking bonus (w_moment * share of messages that matched * weight)
+  - feeds the game_events signal (share of messages that matched * weight, see signals.py)
   - picks the clip window (setup-heavy moments get a longer pre-roll)
   - picks a hook line from the moment's templates
   - flags moments that need a human safety look before posting
