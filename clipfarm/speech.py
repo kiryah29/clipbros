@@ -27,9 +27,8 @@ from .config import ROOT
 from .craft.captions import Word
 from .signals import BaselineTrigger, strength
 
-SHERPA_MODEL = "sherpa-onnx-whisper-tiny.en"
-SHERPA_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-              f"{SHERPA_MODEL}.tar.bz2")
+SHERPA_MODEL = "sherpa-onnx-whisper-base.en"   # tiny.en is faster but loops/mishears more
+SHERPA_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{}.tar.bz2"
 TOKEN_RE = re.compile(r"[a-z0-9']+")
 
 
@@ -137,21 +136,21 @@ def make_transcriber(cfg: dict, quiet: bool = False):
     return None
 
 
-def download_sherpa_model(dest: Path | None = None) -> Path:
+def download_sherpa_model(dest: Path | None = None, model: str = SHERPA_MODEL) -> Path:
     dest = Path(dest or ROOT / "models")
     dest.mkdir(parents=True, exist_ok=True)
-    if (dest / SHERPA_MODEL).exists():
-        return dest / SHERPA_MODEL
-    tmp = dest / f"{SHERPA_MODEL}.tar.bz2"
-    print(f"Downloading {SHERPA_URL} (~120 MB)...")
-    urllib.request.urlretrieve(SHERPA_URL, tmp)
+    if (dest / model).exists():
+        return dest / model
+    tmp = dest / f"{model}.tar.bz2"
+    print(f"Downloading {SHERPA_URL.format(model)}...")
+    urllib.request.urlretrieve(SHERPA_URL.format(model), tmp)
     with tarfile.open(tmp) as t:
         keep = [m for m in t.getmembers() if m.isfile() and
                 (m.name.endswith(".int8.onnx") or m.name.endswith("tokens.txt"))
                 and ".." not in m.name and not m.name.startswith("/")]
         t.extractall(dest, members=keep)
     tmp.unlink(missing_ok=True)
-    return dest / SHERPA_MODEL
+    return dest / model
 
 
 # ----------------------------------------------------------------------- scoring

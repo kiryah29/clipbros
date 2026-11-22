@@ -57,6 +57,8 @@ def main(argv: list[str] | None = None) -> None:
 
     ss = sub.add_parser("setup-speech", help="download the speech-to-text model and test it")
     ss.add_argument("--model-dir", default=None)
+    ss.add_argument("--model", choices=["base.en", "tiny.en"], default="base.en",
+                    help="base.en is more accurate; tiny.en is faster on slow PCs")
 
     w = sub.add_parser("watch", help="chat-only test: show live chat pace and spikes, no recording")
     w.add_argument("platform", choices=["twitch", "youtube", "kick"])
@@ -117,9 +119,10 @@ def main(argv: list[str] | None = None) -> None:
         except ImportError:
             print("faster-whisper is not installed (it has no Windows ARM64 build); "
                   "using sherpa-onnx.")
-        path = download_sherpa_model(Path(a.model_dir) if a.model_dir else None)
+        path = download_sherpa_model(Path(a.model_dir) if a.model_dir else None,
+                                     f"sherpa-onnx-whisper-{a.model}")
         print(f"sherpa-onnx model: {path}")
-        if a.model_dir:
+        if a.model_dir or a.model != "base.en":
             print(f"Set speech.sherpa_model_dir: {path} in config/settings.yaml")
         t = make_transcriber({**settings["speech"], "sherpa_model_dir": str(path)})
         if t is None:

@@ -37,7 +37,7 @@ signals:
 
 audio:
   enabled: true
-  min_ratio: 3.0            # loudness 3x the streamer's normal (about +10 dB) opens a clip
+  min_ratio: 6.0            # loudness 6x the streamer's normal (about +16 dB) opens a clip; 3x fired 30 times in 30 min
   min_sustain_s: 1          # ...for at least this long
   warmup_s: 90              # learn the normal loudness first
   baseline_halflife_s: 300
@@ -49,7 +49,7 @@ audio:
 speech:
   engine: auto              # auto | faster_whisper | sherpa_onnx | none (see README)
   whisper_model: base.en    # faster_whisper model size
-  sherpa_model_dir: models/sherpa-onnx-whisper-tiny.en   # python -m clipfarm setup-speech
+  sherpa_model_dir: models/sherpa-onnx-whisper-base.en   # python -m clipfarm setup-speech [--model tiny.en]
   language: en
   chunk_s: 4                # transcribe the stream in chunks this long
   max_backlog: 6            # if the PC falls behind, drop the oldest chunks
