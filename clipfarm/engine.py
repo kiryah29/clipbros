@@ -15,7 +15,8 @@ from .audio import SAMPLE_RATE, AudioTracker, decode_pcm
 from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
 from .detector import LagFilter, SpikeDetector, chat_values, score_spike
 from .models import Spike
-from .moments import classify, clip_window_for, pick_hook
+from .hooks import HookHistory, write_hook
+from .moments import classify, clip_window_for
 from .queue import ClipQueue
 from .recorder import DemoRecorder, LiveRecorder
 from .scheduler import in_window
@@ -80,8 +81,10 @@ class MomentBook:
 
 
 def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTracker | None,
-                 speech: SpeechTracker | None) -> tuple[float, dict]:
-    """All signals for a clip window -> (score 0-100, receipt)."""
+                 speech: SpeechTracker | None, hooks: HookHistory | None = None
+                 ) -> tuple[float, dict]:
+    """All signals for a clip window -> (score 0-100, receipt). `hooks` is the channel's
+    recent hook history, so consecutive clips get different hook cards."""
     start, end, sp = m["start"], m["end"], m["spike"]
     trig = float(cfg["signals"].get("trigger_ratio", 3.0))
     chat_ratio = chat.ratio_between(start, end) if chat else 1.0
@@ -114,38 +117,15 @@ def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTra
         r.update(sp.to_dict())
     if sp and sp.moment:
         r["why"] += f"; looks like: {sp.moment['label']} ({sp.moment['hits']} matching msgs)"
-        r["hook"] = pick_hook(sp.moment, cfg["moments"], "", cfg["streamer"],
-                              cfg.get("game_name", ""), seed=int(sp.peak_ts))
         r["safety_review"] = sp.moment.get("safety") == "review"
-    if not r.get("hook"):
-        r["hook"] = trigger_hook(r, cfg)
     if speech:
         r["transcript"] = [[w.text, round(w.start, 2), round(w.end, 2)]
                            for w in speech.words_between(start, end)]
+    peak = sp.peak_ts if sp else (m.get("audio") or {}).get("peak_ts")
+    r["hook"], r["hook_kind"] = write_hook(
+        r, cfg, hooks, peak_rel=None if peak is None else peak - start,
+        seed=int(peak if peak is not None else start))
     return score, r
-
-
-def trigger_hook(receipt: dict, cfg: dict) -> str:
-    """Hook card text from what made the clip. "WAIT FOR IT..." only when the stream got
-    loud enough to be an audio spike on its own AND chat went well past a normal spike;
-    otherwise the excited phrase, else a line for a loud moment or a chat reaction."""
-    reel, hooks = cfg["reel"], cfg["reel"].get("trigger_hooks") or {}
-    fill = {"streamer": cfg["streamer"], "game": cfg.get("game_name", "")}
-    a, c = receipt.get("audio_ratio", 0.0), receipt.get("chat_ratio", 1.0)
-    need_a = float(reel.get("wait_hook_audio_ratio") or cfg["audio"].get("min_ratio", 6.0))
-    need_c = float(reel.get("wait_hook_chat_ratio", 5.0))
-    if a >= need_a and c >= need_c:
-        return reel.get("hook_text") or "WAIT FOR IT..."
-    phrases = receipt.get("speech", {}).get("phrases") or []
-    if phrases and hooks.get("phrase"):
-        word, _, n = phrases[0].partition(" x")          # "no x3" -> "NO NO NO"
-        said = " ".join([word] * int(n)) if n.isdigit() else phrases[0]
-        return hooks["phrase"].format(phrase=said.upper(), **fill)
-    if (a >= need_a or "audio" in receipt.get("triggers", [])) and hooks.get("audio"):
-        return hooks["audio"].format(**fill)
-    if "chat" in receipt.get("triggers", []) and hooks.get("chat"):
-        return hooks["chat"].format(**fill)
-    return ""
 
 
 def unconfirmed(receipt: dict, audio_cfg: dict) -> str | None:
@@ -159,11 +139,11 @@ def unconfirmed(receipt: dict, audio_cfg: dict) -> str | None:
     return f"audio only (chat {receipt.get('chat_ratio', 1.0)}x < {need}x, no excited phrase)"
 
 
-def build_receipt(sp: Spike, cfg: dict) -> dict:
+def build_receipt(sp: Spike, cfg: dict, hooks: HookHistory | None = None) -> dict:
     """Chat-only receipt (used by `watch`)."""
     start, end = clip_window(sp, cfg["clip"], cfg["moments"])
     return score_moment(dict(start=start, end=end, triggers=["chat"], spike=sp, audio=None),
-                        cfg, None, None, None)[1]
+                        cfg, None, None, None, hooks)[1]
 
 
 def _paths(data_dir: Path, channel: str, clip_id: int) -> tuple[Path, Path, Path]:
@@ -250,6 +230,7 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
     det.tick(last + 60)  # flush
 
     book = MomentBook(cfg["clip"])
+    hooks = HookHistory()
     triggers = [(sp.peak_ts, "chat", sp) for sp in det.spikes] + \
         [(ev["peak_ts"], "audio", ev) for ev in (audio.trigger.events if audio else [])]
     for _, kind, x in sorted(triggers, key=lambda t: t[0]):
@@ -262,7 +243,7 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
           f"{len(audio.trigger.events) if audio else 0} loudness spikes "
           f"-> {len(book.items)} clips.\n")
     for i, m in enumerate(book.items):
-        score, receipt = score_moment(m, cfg, det, audio, speech)
+        score, receipt = score_moment(m, cfg, det, audio, speech, hooks)
         if why_not := unconfirmed(receipt, cfg["audio"]):
             print(f"  skipped: {why_not}")
             continue
@@ -292,6 +273,7 @@ class ChannelWorker:
         self.recorder: LiveRecorder | DemoRecorder | None = None
         self.pending: list[asyncio.Task] = []
         self.book = MomentBook(self.cfg["clip"])
+        self.hooks = HookHistory()
         self.det: SpikeDetector | None = None
         self.audio: AudioTracker | None = None
         self.speech: SpeechTracker | None = None
@@ -325,7 +307,7 @@ class ChannelWorker:
                 (self.transcriber and (self.speech.processed_until or 0) < m["end"] - 1)):
             await asyncio.sleep(1)
         score, receipt = score_moment(m, self.cfg, self.det, self.audio,
-                                      self.speech if self.transcriber else None)
+                                      self.speech if self.transcriber else None, self.hooks)
         if why_not := unconfirmed(receipt, self.cfg["audio"]):
             print(f"[{name}] skipped (score {score}): {why_not}")
             return
