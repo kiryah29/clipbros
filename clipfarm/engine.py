@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .chat import make_chat_source
+from .chat.log import ChatLog
 from .chat.simulated import DEMO_LINES, SimulatedChat
 from .config import channel_settings
 from .craft import render_reel
@@ -216,7 +217,8 @@ def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
             words = transcribe(raw, cfg["reel"].get("transcriber", "none"))
         if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
             words = drop_dialogue(words, subtitle_times(raw, box))
-        render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"))
+        render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"),
+                    chat=clip.receipt.get("chat"))
         queue.update(clip_id, reel_path=str(reel), status="crafted")
     except Exception as e:
         err = getattr(e, "stderr", b"") or b""
@@ -275,8 +277,10 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
     print(f"Simulating {minutes:g} min of chat + stream audio for '{channel['name']}' "
           f"({len(chat.bursts)} hype bursts, {len(solo)} screams chat ignores)...")
     last = None
+    chatlog = ChatLog()
     for msg in chat.generate():
         det.feed(msg)
+        chatlog.add(msg)
         last = msg.ts
     det.tick(last + 60)  # flush
 
@@ -298,6 +302,7 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
         if why_not := skip_reason(receipt, cfg):
             print(f"  skipped: {why_not}")
             continue
+        receipt["chat"] = chatlog.between(m["start"], m["end"])
         cid = queue.add(channel["name"], channel["platform"], m["start"], m["end"], score, receipt)
         raw, _, rpath = _paths(data_dir, channel["name"], cid)
         save_receipt(rpath, receipt)
@@ -321,6 +326,7 @@ class ChannelWorker:
         self.queue = queue
         self.data_dir = data_dir
         self.source = make_chat_source(channel)
+        self.chatlog = ChatLog()
         self.recorder: LiveRecorder | DemoRecorder | None = None
         self.pending: list[asyncio.Task] = []
         self.book = MomentBook(self.cfg["clip"])
@@ -362,6 +368,7 @@ class ChannelWorker:
         if why_not := skip_reason(receipt, self.cfg):
             print(f"[{name}] skipped (score {score}): {why_not}")
             return
+        receipt["chat"] = self.chatlog.between(m["start"], m["end"])
         cid = self.queue.add(name, self.ch["platform"], m["start"], m["end"], score, receipt)
         raw, _, rpath = _paths(self.data_dir, name, cid)
         save_receipt(rpath, receipt)
@@ -480,6 +487,7 @@ class ChannelWorker:
                 self.late_count += 1
                 continue
             self.det.feed(msg)
+            self.chatlog.add(msg)
             self.msg_count += 1
 
     async def _ticker(self) -> None:

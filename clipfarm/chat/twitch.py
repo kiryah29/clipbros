@@ -71,4 +71,5 @@ class TwitchChat(ChatSource):
             sent = int(tags["tmi-sent-ts"]) / 1000
         except (KeyError, ValueError):
             sent = None
-        return ChatMessage(self.channel, time.time(), user, text, sent)
+        return ChatMessage(self.channel, time.time(), user, text, sent,
+                           color=tags.get("color") or None)

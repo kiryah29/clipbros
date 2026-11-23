@@ -4,6 +4,8 @@ facecam_top layout (top to bottom):
     [ facecam band ]  cropped from the source using the channel's facecam box
     [ gameplay     ]  center crop of the source
     [ backdrop     ]  optional looping filler footage (else gameplay grows)
+    With chat_strip on and chat in the receipt, the backdrop is replaced by a solid
+    Twitch chat strip that ends where TikTok's description bar starts (chatstrip.py).
 Brand layer (logo, lime seam line, hook card) is drawn by overlay.py as PNGs;
 word captions/CTA are burned in from an ASS file; optional music is ducked under.
 """
@@ -14,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 from .captions import Word, build_ass
+from .chatstrip import chat_ass
 from .overlay import draw_base, draw_hook, font_path, safe_box
 
 
@@ -32,12 +35,15 @@ def _ff_path(p: Path) -> str:
 
 
 def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
-                words: list[Word], hook_text: str | None = None) -> Path:
+                words: list[Word], hook_text: str | None = None,
+                chat: list | None = None) -> Path:
     W, H = cfg["width"], cfg["height"]
     dur = probe_duration(raw)
     backdrop = cfg.get("backdrop")
     music = cfg.get("music")
-    has_back = bool(backdrop) and Path(backdrop).exists()
+    strip = bool(chat) and cfg.get("chat_strip", False) and \
+        cfg["layout"] == "facecam_top" and bool(facecam)
+    has_back = bool(backdrop) and Path(backdrop).exists() and not strip
     has_music = bool(music) and Path(music).exists()
 
     inputs = ["-i", str(raw)]
@@ -50,6 +56,9 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
     if cfg["layout"] == "facecam_top" and facecam:
         fh = _even(H * cfg["facecam_band_ratio"])
         gh = _even(H * cfg["gameplay_band_ratio"]) if has_back else H - fh
+        if strip:   # chat strip sits right above TikTok's description bar
+            strip_top = _even(safe_box(cfg)[3] - int(cfg.get("chat_strip_height", 272)))
+            gh = strip_top - fh
         bh = H - fh - gh
         fc = facecam
         f.append("[0:v]split=2[src1][src2]")
@@ -61,9 +70,17 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
             f.append(f"[1:v]scale={W}:{bh}:force_original_aspect_ratio=increase,"
                      f"crop={W}:{bh},setsar=1[back]")
             stack.append("[back]")
-        f.append("".join(stack) + f"vstack=inputs={len(stack)}[stacked]")
+        if strip:
+            accent = cfg.get("accent_color", "#C8F03C").lstrip("#")
+            f.append("".join(stack) + f"vstack=inputs={len(stack)},"
+                     f"pad={W}:{H}:0:0:color=0x{cfg.get('chat_strip_bg', '#1D1A26').lstrip('#')},"
+                     f"drawbox=x=0:y={strip_top}:w={W}:h=4:color=0x{accent}:t=fill[stacked]")
+        else:
+            f.append("".join(stack) + f"vstack=inputs={len(stack)}[stacked]")
         seam_y = fh
         caption_y = fh + gh - 260 if has_back else int(H * cfg.get("caption_y_ratio", 0.60))
+        if strip:
+            caption_y = min(caption_y, strip_top - 110)
     else:
         # gameplay_only: blurred fill behind a centered 16:9 frame
         f.append("[0:v]split=2[bg][fg]")
@@ -90,9 +107,14 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
         f.append(f"{last}[{n_in + 1}:v]overlay=0:0:shortest=1{enable}[b2]")
         last = "[b2]"
 
+    chat_styles, chat_events = [], []
+    if strip:
+        chat_styles, chat_events = chat_ass(
+            chat, dur, cfg, (left + 18, strip_top + 26, right, strip_top +
+                             int(cfg.get("chat_strip_height", 272)) - 22))
     ass = out.with_suffix(".ass")
     build_ass(words, dur, cfg, caption_y, ass, caption_x=(left + right) // 2,
-              max_w=right - left)
+              max_w=right - left, extra_styles=chat_styles, extra_events=chat_events)
     fp = font_path(cfg)
     fonts = f":fontsdir='{_ff_path(fp.parent)}'" if fp else ""
     f.append(f"{last}ass='{_ff_path(ass)}'{fonts}[v]")
