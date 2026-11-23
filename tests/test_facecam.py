@@ -110,3 +110,22 @@ def test_no_face_in_clip_returns_none(tmp_path):
         vw.write(f)
     vw.release()
     assert fc.detect_facecam(path) is None
+
+
+def test_fit_aspect_grows_a_box_that_hugs_a_borderless_cam():
+    face = (50, 162, 30, 37)                       # green-screen cam: no overlay border
+    x0, y0, x1, y1 = fc.fit_aspect((42, 93, 119, 240), face, 1.875, face_at=0.4, frame=(640, 360))
+    assert face[3] <= 0.4 * (y1 - y0) + 1          # face no longer fills the band
+    assert (x1 - x0) / (y1 - y0) == pytest.approx(1.875, abs=0.02)
+    assert 0 <= x0 <= face[0] and x1 >= face[0] + face[2] and 0 <= y0 <= face[1] and y1 <= 360
+
+
+@pytest.mark.skipif(cv2 is None, reason="opencv-python-headless not installed")
+def test_sample_frames_reads_with_ffmpeg_not_videocapture(tmp_path, monkeypatch):
+    import subprocess
+    clip = tmp_path / "c.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=10:duration=2",
+                    "-pix_fmt", "yuv420p", str(clip)], check=True)
+    monkeypatch.setattr(cv2, "VideoCapture", None)   # the Windows ARM64 wheel can't open mp4s
+    frames = fc.sample_frames(clip, n=4)
+    assert len(frames) == 4 and frames[0].shape == (360, 640, 3)

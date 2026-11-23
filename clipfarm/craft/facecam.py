@@ -14,6 +14,8 @@ OpenCV is optional: without it this returns None and prints why once.
 """
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 try:
@@ -49,20 +51,35 @@ def _face_detector(w: int, h: int):
     return _detector
 
 
+def _probe(path: Path) -> tuple[int, int, float]:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "stream=width,height:format=duration",
+                          "-of", "json", str(path)], capture_output=True, text=True, check=True)
+    info = json.loads(out.stdout)
+    st = info["streams"][0]
+    return int(st["width"]), int(st["height"]), float(info["format"].get("duration") or 0)
+
+
 def sample_frames(path: Path, n: int = 8, width: int = 640) -> list:
-    """n BGR frames spread over 10-90 % of the clip, resized to `width`."""
-    cap = cv2.VideoCapture(str(path))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    """n BGR frames spread over 10-90 % of the clip, resized to `width`.
+
+    Frames come from ffmpeg, not cv2.VideoCapture: the Windows ARM64 OpenCV wheel ships
+    without its FFmpeg video plugin, so VideoCapture opens nothing there and the facecam
+    was silently never found."""
+    try:
+        W, H, dur = _probe(path)
+    except (OSError, subprocess.CalledProcessError, KeyError, IndexError, ValueError):
+        return []
+    h = max(2, int(H * width / W) // 2 * 2)
     frames = []
     for i in range(n):
-        if total > 0:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * (0.1 + 0.8 * i / max(n - 1, 1))))
-        ok, img = cap.read()
-        if not ok:
-            continue
-        h = int(img.shape[0] * width / img.shape[1])
-        frames.append(cv2.resize(img, (width, h), interpolation=cv2.INTER_AREA))
-    cap.release()
+        t = dur * (0.1 + 0.8 * i / max(n - 1, 1))
+        out = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.2f}", "-i", str(path),
+                              "-frames:v", "1", "-vf", f"scale={width}:{h}",
+                              "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+                             capture_output=True)
+        if out.returncode == 0 and len(out.stdout) == width * h * 3:
+            frames.append(np.frombuffer(out.stdout, np.uint8).reshape(h, width, 3).copy())
     return frames
 
 
@@ -152,19 +169,33 @@ def overlay_box(frames, face: tuple) -> tuple[int, int, int, int]:
     return x0, y0, x1, y1
 
 
-def fit_aspect(box: tuple, face: tuple, aspect: float, face_at: float = 0.5) -> tuple:
+def fit_aspect(box: tuple, face: tuple, aspect: float, face_at: float = 0.5,
+               frame: tuple[int, int] | None = None, max_face: float = 0.4) -> tuple:
     """Trim box (x0, y0, x1, y1) to width/height = aspect, keeping the face in view: centred
-    across, and `face_at` of the way down (the hook card covers the bottom of the band)."""
+    across, and `face_at` of the way down (the hook card covers the bottom of the band).
+
+    With `frame` (W, H), a box so tight that the face would fill more than `max_face` of the
+    band's height is grown around the face instead (borderless green-screen cams have no
+    overlay border, so the border search hugs the head and the band became a forehead)."""
     x0, y0, x1, y1 = box
     fx, fy, fw, fh = face
     w, h = x1 - x0, y1 - y0
     if w / h > aspect:
         nw = int(round(h * aspect))
         nx = min(max(int(fx + fw / 2 - nw / 2), x0), x1 - nw)
-        return nx, y0, nx + nw, y1
-    nh = int(round(w / aspect))
-    ny = min(max(int(fy + fh / 2 - nh * face_at), y0), y1 - nh)
-    return x0, ny, x1, ny + nh
+        x0, x1 = nx, nx + nw
+    else:
+        nh = int(round(w / aspect))
+        ny = min(max(int(fy + fh / 2 - nh * face_at), y0), y1 - nh)
+        y0, y1 = ny, ny + nh
+    if frame and fh > max_face * (y1 - y0):
+        W, H = frame
+        nh = min(int(round(fh / max_face)), H, int(W / aspect))
+        nw = int(round(nh * aspect))
+        nx = min(max(int(fx + fw / 2 - nw / 2), 0), W - nw)
+        ny = min(max(int(fy + fh / 2 - nh * face_at), 0), H - nh)
+        return nx, ny, nx + nw, ny + nh
+    return x0, y0, x1, y1
 
 
 def detect_facecam(path: Path, samples: int = 8, min_share: float = 0.4,
@@ -185,6 +216,6 @@ def detect_facecam(path: Path, samples: int = 8, min_share: float = 0.4,
     if x1 - x0 < face[2] or y1 - y0 < face[3]:
         return None
     if aspect:
-        x0, y0, x1, y1 = fit_aspect((x0, y0, x1, y1), face, aspect)
+        x0, y0, x1, y1 = fit_aspect((x0, y0, x1, y1), face, aspect, face_at=0.4, frame=(W, H))
     return {"x": round(x0 / W, 4), "y": round(y0 / H, 4),
             "w": round((x1 - x0) / W, 4), "h": round((y1 - y0) / H, 4)}
