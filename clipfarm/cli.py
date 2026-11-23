@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .config import ROOT, channel_settings, load_channels, load_settings
+from .agent import candidate_json
 from .engine import craft_clip, run_demo, run_live
 from .queue import ClipQueue
 
@@ -19,6 +20,14 @@ def _load_env() -> None:
             if "=" in line and not line.lstrip().startswith("#"):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
+
+
+def ranked_candidates(clips, include_low: bool = False) -> list[dict]:
+    """ClipAgent candidates of queued clips, most confident (then highest score) first."""
+    rows = [(c, c.receipt["clip_agent"]) for c in clips if c.receipt.get("clip_agent")]
+    rows = [(c, ca) for c, ca in rows if include_low or ca.get("recommended")]
+    rows.sort(key=lambda r: (r[1]["confidence_score"], r[0].score), reverse=True)
+    return [{"clip_id": c.id, "channel": c.channel, **candidate_json(ca)} for c, ca in rows]
 
 
 def _print_queue(q: ClipQueue, status: str | None, limit: int) -> None:
@@ -72,6 +81,9 @@ def main(argv: list[str] | None = None) -> None:
     qp.add_argument("--status", default=None)
     qp.add_argument("--limit", type=int, default=20)
 
+    cp = sub.add_parser("candidates", help="ClipAgent candidates as JSON, ranked by confidence")
+    cp.add_argument("--all", action="store_true", help="include clips under the confidence floor")
+    cp.add_argument("--limit", type=int, default=50)
     rp = sub.add_parser("receipt", help="print a clip's receipt")
     rp.add_argument("id", type=int)
 
@@ -161,6 +173,9 @@ def main(argv: list[str] | None = None) -> None:
                     host=a.host, port=a.port)
     elif a.cmd == "queue":
         _print_queue(q(), a.status, a.limit)
+    elif a.cmd == "candidates":
+        print(json.dumps(ranked_candidates(q().ranked(None, 10000), a.all)[:a.limit],
+                         indent=2))
     elif a.cmd == "receipt":
         c = q().get(a.id)
         print(json.dumps(c.receipt, indent=2) if c else "not found")

@@ -37,6 +37,43 @@ signals:
     game_events: 0.07       # game-profile moment match (config/games/)
     twitch_clips: 0.03      # viewers clipping it on Twitch (not wired up yet, scores 0)
 
+# ClipAgent (clipfarm/agent.py): checks each scored clip against the ClipAgent spec.
+# A keyword never makes a clip on its own: a clip needs min_signals of the six checks
+# (chat keywords, chat speed spike, !/? or emote-wall chat, audio spike, spoken trigger
+# phrase, context event) and one of them must be a chat or audio spike. It also labels
+# the clip type and writes <id>_candidate.json next to the clip's receipt.
+# Replace a bucket per game/channel, or add to it with extra_chat_keywords /
+# extra_speech_phrases (same shape), e.g. a streamer's own emotes or another language.
+clip_agent:
+  enabled: true
+  min_confidence: 0.65      # only clips at or above this are recommended
+  gate: true                # true = clips under min_confidence are skipped, not recorded
+  min_signals: 2            # independent checks that must agree
+  full_signals: 4           # this many agreeing checks = full corroboration
+  intensity_full_score: 50  # moment score (0-100) that counts as full intensity
+  chat_keyword_share: 0.10  # a bucket counts when this share of spike messages hit it
+  punct_share: 0.30         # share of messages with ! or ? that counts as intense chat
+  emote_wall_share: 0.30    # one token in this share of messages = emote wall
+  chat_keywords:            # matched as whole tokens, case-insensitive, LETSGOOO = letsgoo
+    hype: [Pog, POGGERS, PogChamp, GIGACHAD, LETSGO, letsgo]
+    funny: [KEKW, OMEGALUL, LUL, LULW]
+    tense: [monkaS, PauseChamp, OMG, WTF]
+    clip_command: ["!clip", "CLIP IT"]
+    outcome_win: [CLUTCH, GG, EZClap]
+    outcome_loss: [RIP]
+  speech_phrases:           # matched in the streamer's transcript
+    shock: ["oh my god", "no way", "what the", "are you kidding me", "insane"]
+    celebration: ["let's go", "lets go", "let's goo", "i'm the best", "easy"]
+    frustration: ["bruh", "i'm dead", "literally", "what the hell"]
+  context_phrases:          # matched in chat AND transcript; these name the clip type
+    donation: ["thank you for the", "thanks for the", "donation", "donated", "gifted",
+               "bits", "superchat", "super chat"]
+    chat_interaction: ["chat said", "chat is", "chat why", "who said", "reading chat",
+                       "read that", "chat you"]
+    rage_quit: ["alt f4", "alt+f4", "i quit", "i'm done", "uninstall", "rage quit"]
+  extra_chat_keywords: {}
+  extra_speech_phrases: {}
+
 audio:
   enabled: true
   min_ratio: 6.0            # loudness 6x the streamer's normal (about +16 dB) opens a clip; 3x fired 30 times in 30 min
@@ -113,6 +150,8 @@ reel:
     blocklist: []           # extra words never burned onto a clip (built-in list in hooks.py)
     templates: {}           # override a kind's lines, e.g. {chat: ["Chat went {chat_x}x faster"]}
                             # fields: {streamer} {game} {phrase} {quote} {chat_word} {chat_x} {moment}
+                            # ClipAgent clip types have their own kinds: type_clutch, type_fail,
+                            # type_rage, type_donation, type_chat_interaction, type_hype, type_funny
   hook_seconds: 0           # 0 = hook card stays up the whole clip
   cta_text: "Follow for more clips"
   cta_seconds: 2.5

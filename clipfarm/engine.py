@@ -11,6 +11,7 @@ from .chat import make_chat_source
 from .chat.simulated import DEMO_LINES, SimulatedChat
 from .config import channel_settings
 from .craft import render_reel
+from .agent import below_floor, candidate_json, chat_evidence, evaluate
 from .audio import SAMPLE_RATE, AudioTracker, decode_pcm
 from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
 from .craft.facecam import detect_facecam
@@ -48,8 +49,11 @@ def audio_window(ev: dict, audio_cfg: dict, clip_cfg: dict) -> tuple[float, floa
 
 def make_detector(name: str, cfg: dict, on_spike=None) -> SpikeDetector:
     moments = cfg.get("moments") or []
+    agent = cfg.get("clip_agent") or {}
     return SpikeDetector(name, cfg["detector"], cfg["ranking"]["hype_tokens"], on_spike=on_spike,
-                         classifier=(lambda msgs: classify(msgs, moments)) if moments else None)
+                         classifier=(lambda msgs: classify(msgs, moments)) if moments else None,
+                         analyzer=(lambda msgs: chat_evidence(msgs, agent))
+                         if agent.get("enabled", True) else None)
 
 
 class MomentBook:
@@ -82,10 +86,11 @@ class MomentBook:
 
 
 def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTracker | None,
-                 speech: SpeechTracker | None, hooks: HookHistory | None = None
-                 ) -> tuple[float, dict]:
+                 speech: SpeechTracker | None, hooks: HookHistory | None = None,
+                 origin_ts: float | None = None) -> tuple[float, dict]:
     """All signals for a clip window -> (score 0-100, receipt). `hooks` is the channel's
-    recent hook history, so consecutive clips get different hook cards."""
+    recent hook history, so consecutive clips get different hook cards. The receipt's
+    `clip_agent` entry is the ClipAgent candidate (clip type, confidence, evidence)."""
     start, end, sp = m["start"], m["end"], m["spike"]
     trig = float(cfg["signals"].get("trigger_ratio", 3.0))
     chat_ratio = chat.ratio_between(start, end) if chat else 1.0
@@ -122,6 +127,8 @@ def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTra
     if speech:
         r["transcript"] = [[w.text, round(w.start, 2), round(w.end, 2)]
                            for w in speech.words_between(start, end)]
+    if (cfg.get("clip_agent") or {}).get("enabled", True):
+        r["clip_agent"] = evaluate(r, cfg, score, start, end, origin_ts)
     peak = sp.peak_ts if sp else (m.get("audio") or {}).get("peak_ts")
     r["hook"], r["hook_kind"] = write_hook(
         r, cfg, hooks, peak_rel=None if peak is None else peak - start,
@@ -138,6 +145,22 @@ def unconfirmed(receipt: dict, audio_cfg: dict) -> str | None:
     if receipt.get("chat_ratio", 1.0) >= need or receipt.get("speech", {}).get("phrases"):
         return None
     return f"audio only (chat {receipt.get('chat_ratio', 1.0)}x < {need}x, no excited phrase)"
+
+
+def skip_reason(receipt: dict, cfg: dict) -> str | None:
+    """Why a scored clip is not recorded: audio-only without a second signal, or below
+    the ClipAgent confidence floor. None = keep it."""
+    return unconfirmed(receipt, cfg["audio"]) or below_floor(receipt, cfg)
+
+
+def save_receipt(rpath: Path, receipt: dict) -> None:
+    """The full receipt, plus the ClipAgent candidate JSON next to it."""
+    rpath.parent.mkdir(parents=True, exist_ok=True)
+    rpath.write_text(json.dumps(receipt, indent=2))
+    if receipt.get("clip_agent"):
+        rpath.with_name(rpath.name.replace("_receipt", "_candidate")).write_text(
+            json.dumps(candidate_json(receipt["clip_agent"]), indent=2, ensure_ascii=False),
+            encoding="utf-8")
 
 
 def build_receipt(sp: Spike, cfg: dict, hooks: HookHistory | None = None) -> dict:
@@ -271,17 +294,17 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
           f"{len(audio.trigger.events) if audio else 0} loudness spikes "
           f"-> {len(book.items)} clips.\n")
     for i, m in enumerate(book.items):
-        score, receipt = score_moment(m, cfg, det, audio, speech, hooks)
-        if why_not := unconfirmed(receipt, cfg["audio"]):
+        score, receipt = score_moment(m, cfg, det, audio, speech, hooks, chat.start_ts)
+        if why_not := skip_reason(receipt, cfg):
             print(f"  skipped: {why_not}")
             continue
         cid = queue.add(channel["name"], channel["platform"], m["start"], m["end"], score, receipt)
         raw, _, rpath = _paths(data_dir, channel["name"], cid)
-        rpath.parent.mkdir(parents=True, exist_ok=True)
-        rpath.write_text(json.dumps(receipt, indent=2))
+        save_receipt(rpath, receipt)
         off = m["start"] - chat.start_ts
+        ca = receipt.get("clip_agent") or {}
         print(f"  clip {cid}: +{off:6.1f}s  score={score:5.1f}  [{'+'.join(m['triggers'])}] "
-              f"{receipt['why']}")
+              f"{ca.get('clip_type', '')} conf={ca.get('confidence_score', '-')}  {receipt['why']}")
         if render:
             rec.cut(m["start"], m["end"], raw)
             queue.update(cid, raw_path=str(raw))
@@ -336,13 +359,12 @@ class ChannelWorker:
             await asyncio.sleep(1)
         score, receipt = score_moment(m, self.cfg, self.det, self.audio,
                                       self.speech if self.transcriber else None, self.hooks)
-        if why_not := unconfirmed(receipt, self.cfg["audio"]):
+        if why_not := skip_reason(receipt, self.cfg):
             print(f"[{name}] skipped (score {score}): {why_not}")
             return
         cid = self.queue.add(name, self.ch["platform"], m["start"], m["end"], score, receipt)
         raw, _, rpath = _paths(self.data_dir, name, cid)
-        rpath.parent.mkdir(parents=True, exist_ok=True)
-        rpath.write_text(json.dumps(receipt, indent=2))
+        save_receipt(rpath, receipt)
         print(f"[{name}] clip {cid} (score {score}) {receipt['why']}")
         try:
             await asyncio.to_thread(self.recorder.cut, m["start"], m["end"], raw)
@@ -511,6 +533,9 @@ async def watch_chat(settings: dict, channel: dict) -> None:
             r = build_receipt(sp, cfg)
             flag = "  [HOLD FOR SAFETY REVIEW]" if r["safety_review"] else ""
             print(f"    moment: {sp.moment['label']}  hook: \"{r['hook']}\"{flag}")
+        if (ca := build_receipt(sp, cfg).get("clip_agent")):
+            print(f"    ClipAgent: {ca['clip_type']} conf={ca['confidence_score']} "
+                  f"(chat only, no audio/speech in watch mode) {ca['reason']}")
         print(f"    would clip {c['pre_roll_s']}s before the peak to "
               f"{c['post_roll_s']}s after it ends\n")
 
