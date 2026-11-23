@@ -74,6 +74,8 @@ reel:
   height: 1920
   layout: facecam_top       # facecam_top | gameplay_only
   facecam_band_ratio: 0.30  # share of height given to the facecam band
+  facecam_auto: true        # channel has no facecam: in channels.yaml? find it in the clip
+                            # (needs opencv-python-headless); none found = gameplay_only
   gameplay_band_ratio: 0.45 # rest goes to backdrop (or gameplay grows if no backdrop)
   backdrop: null            # e.g. assets/backdrops/parkour.mp4 (must be footage you own/licensed)
   music: null               # e.g. assets/music/track.mp3 (licensed!)
