@@ -106,8 +106,9 @@ def _place_logo(img: Image.Image, cfg: dict) -> None:
     img.alpha_composite(logo, (x, y))
 
 
-def draw_hook(cfg: dict, text: str, center_y: int, out: Path) -> Path:
-    """Hook card: Paper rounded box with Ink Inter 800 text, centred on `center_y`."""
+def draw_hook(cfg: dict, text: str, center_y: int, out: Path, bottom_y: int | None = None) -> Path:
+    """Hook card: Paper rounded box with Ink Inter 800 text, centred on `center_y`, or with
+    its bottom edge at `bottom_y` when given (so it sits above the gameplay, not over it)."""
     W, H = cfg["width"], cfg["height"]
     left, top, right, _ = safe_box(cfg)
     text = strip_emoji(text)
@@ -125,7 +126,8 @@ def draw_hook(cfg: dict, text: str, center_y: int, out: Path) -> Path:
         size -= 4
     line_h = int(size * 1.18)
     card_h = line_h * len(lines) + 2 * pad_y
-    x0, y0 = cx - card_w // 2, max(top, center_y - card_h // 2)
+    y0 = center_y - card_h // 2 if bottom_y is None else bottom_y - card_h
+    x0, y0 = cx - card_w // 2, max(top, y0)
     # soft shadow, then card
     d.rounded_rectangle([x0, y0 + 6, x0 + card_w, y0 + card_h + 6], radius=20,
                         fill=(*hex_rgb(brand.INK), 80))

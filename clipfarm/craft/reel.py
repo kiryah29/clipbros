@@ -71,6 +71,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
         f.append(f"[fg]scale={W}:-2[fgs]")
         f.append("[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[stacked]")
         seam_y = None
+        frame_top = (H - _even(W * 9 / 16)) // 2   # sources are 16:9
         caption_y = int(H * 0.68)
 
     # brand layer: logo + seam line always, hook card from frame one
@@ -82,8 +83,10 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
     last = "[b1]"
     hook = cfg.get("hook_text") if hook_text is None else hook_text
     if hook:
+        # facecam_top: card straddles the seam; gameplay_only: card sits just above the frame
         hook_png = draw_hook(cfg, hook, seam_y or int(H * 0.30),
-                             out.with_name(out.stem + "_hook.png"))
+                             out.with_name(out.stem + "_hook.png"),
+                             bottom_y=None if seam_y else frame_top - 24)
         inputs += ["-loop", "1", "-i", str(hook_png)]
         hs = float(cfg.get("hook_seconds") or 0)   # 0 = keep the hook card up the whole clip
         enable = f":enable='lt(t,{hs})'" if hs > 0 else ""
