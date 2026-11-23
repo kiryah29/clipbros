@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .captions import Word, build_ass
 from .chatstrip import chat_ass
+from ..nudity import blur_filter
 from .overlay import draw_base, draw_hook, font_path, safe_box
 
 
@@ -36,8 +37,12 @@ def _ff_path(p: Path) -> str:
 
 def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
                 words: list[Word], hook_text: str | None = None,
-                chat: list | None = None) -> Path:
+                chat: list | None = None, censor: list | None = None) -> Path:
+    """censor: [start, end] seconds where the gameplay is blurred (nudity check); the
+    facecam, hook card and captions stay sharp."""
     W, H = cfg["width"], cfg["height"]
+    blur = blur_filter(censor or [])
+    gblur = blur + "," if blur else ""
     dur = probe_duration(raw)
     backdrop = cfg.get("backdrop")
     music = cfg.get("music")
@@ -64,7 +69,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
         f.append("[0:v]split=2[src1][src2]")
         f.append(f"[src1]crop=iw*{fc['w']}:ih*{fc['h']}:iw*{fc['x']}:ih*{fc['y']},"
                  f"scale={W}:{fh}:force_original_aspect_ratio=increase,crop={W}:{fh},setsar=1[face]")
-        f.append(f"[src2]scale=-2:{gh},crop={W}:{gh},setsar=1[game]")
+        f.append(f"[src2]{gblur}scale=-2:{gh},crop={W}:{gh},setsar=1[game]")
         stack = ["[face]", "[game]"]
         if has_back:
             f.append(f"[1:v]scale={W}:{bh}:force_original_aspect_ratio=increase,"
@@ -83,7 +88,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
             caption_y = min(caption_y, strip_top - 110)
     else:
         # gameplay_only: blurred fill behind a centered 16:9 frame
-        f.append("[0:v]split=2[bg][fg]")
+        f.append(f"[0:v]{gblur}split=2[bg][fg]")
         f.append(f"[bg]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=20:2[bgb]")
         f.append(f"[fg]scale={W}:-2[fgs]")
         f.append("[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[stacked]")

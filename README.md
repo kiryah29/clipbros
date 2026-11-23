@@ -43,6 +43,8 @@ It prints the chat pace every 10 s and any spike it would have clipped.
    No face found means a gameplay-only reel. The receipt says which (`facecam_source`).
 3. Speech-to-text (once): `python -m clipfarm setup-speech` downloads a small model
    (~100 MB, into `models/`). Without it, speech scores 0 and everything else still works.
+   Nudity check (once, optional): `python -m clipfarm setup-nudity` fetches its model
+   (~12 MB). It is also fetched on the first clip; see "Nudity check" below.
 4. `python -m clipfarm run`. Start it **before** the stream goes live, or add a `schedule`
    so it only watches during the streamer's usual hours.
 
@@ -180,6 +182,25 @@ Set `game: gta6` (and `streamer: "Name"` for hooks) on a channel to load
   receipt so they are never auto-posted.
 
 Merge order is `settings.yaml` < game profile < the channel's own overrides.
+
+## Nudity check
+
+Every clip is scanned before its reel is rendered (`clipfarm/nudity.py`, `nudity:` in
+`settings.yaml`). Three frames a second go through NudeNet's exposed-body-part detector
+(ONNX, runs on onnxruntime or OpenCV, so on the Windows ARM64 PC too), at 320 and 640 px
+so a small naked figure in a wide shot is caught as well as a close-up.
+
+* **clear nudity**: those seconds (plus half a second each side) are blurred hard in the
+  reel's gameplay. Facecam, hook card and captions stay sharp. The clip is `crafted` as usual.
+* **unsure** (a frame outside the blurred part scores just under the blur line), **mostly
+  nude** (over half the clip would be blurred) or **check could not run**: the clip is
+  rendered but its status is `held`, the control page and TikTok page flag it, and it
+  needs a human look before posting.
+
+The result is in the receipt under `nudity` (decision, blurred ranges, labels, why).
+Try it on any video: `python -m clipfarm setup-nudity path/to/clip.mp4`.
+Model licence: the NudeNet package is published as MIT on PyPI, but its GitHub repo
+carries an AGPL-3.0 licence file, so the model is downloaded, not committed.
 
 ## Review workflow
 

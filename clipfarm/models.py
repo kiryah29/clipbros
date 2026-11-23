@@ -45,7 +45,7 @@ class Clip:
     clip_start_ts: float
     clip_end_ts: float
     score: float
-    status: str                # recorded | crafted | approved | rejected | failed
+    status: str                # recorded | crafted | held (nudity check: look first) | approved | rejected | failed
     raw_path: str | None
     reel_path: str | None
     receipt: dict[str, Any]

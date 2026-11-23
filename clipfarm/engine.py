@@ -16,6 +16,7 @@ from .agent import below_floor, candidate_json, chat_evidence, evaluate
 from .audio import SAMPLE_RATE, AudioTracker, decode_pcm
 from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
 from .craft.facecam import detect_facecam
+from .nudity import check_clip as check_nudity
 from .detector import LagFilter, SpikeDetector, chat_values, score_spike
 from .models import Spike
 from .hooks import HookHistory, write_hook
@@ -200,7 +201,7 @@ def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | Non
 
 
 def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
-               words=None) -> None:
+               words=None, nudity_check=check_nudity) -> None:
     clip = queue.get(clip_id)
     raw = Path(clip.raw_path)
     reel = raw.with_name(raw.name.replace("_raw", "_reel"))
@@ -217,9 +218,14 @@ def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
             words = transcribe(raw, cfg["reel"].get("transcriber", "none"))
         if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
             words = drop_dialogue(words, subtitle_times(raw, box))
+        safety = nudity_check(raw, cfg.get("nudity"))
+        receipt = {**queue.get(clip_id).receipt, "nudity": safety}
+        if safety["decision"] != "clean":
+            print(f"  nudity check clip {clip_id}: {safety['decision']} ({safety['why']})")
         render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"),
-                    chat=clip.receipt.get("chat"))
-        queue.update(clip_id, reel_path=str(reel), status="crafted")
+                    chat=clip.receipt.get("chat"), censor=safety.get("ranges"))
+        status = "held" if safety["decision"] == "review" else "crafted"
+        queue.update(clip_id, reel_path=str(reel), status=status, receipt=receipt)
     except Exception as e:
         err = getattr(e, "stderr", b"") or b""
         queue.update(clip_id, status="failed")

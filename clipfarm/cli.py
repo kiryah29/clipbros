@@ -73,6 +73,9 @@ def main(argv: list[str] | None = None) -> None:
     ss.add_argument("--model", choices=["base.en", "tiny.en"], default="base.en",
                     help="base.en is more accurate; tiny.en is faster on slow PCs")
 
+    sn = sub.add_parser("setup-nudity", help="download the nudity-check model and test it")
+    sn.add_argument("clip", nargs="?", help="optional: scan this video and print the result")
+
     w = sub.add_parser("watch", help="chat-only test: show live chat pace and spikes, no recording")
     w.add_argument("platform", choices=["twitch", "youtube", "kick"])
     w.add_argument("channel")
@@ -156,6 +159,15 @@ def main(argv: list[str] | None = None) -> None:
         from .audio import SAMPLE_RATE
         t.transcribe_pcm(b"\x00\x00" * SAMPLE_RATE)   # loads + runs the model once
         print(f"Speech-to-text ready: {t.name}")
+    elif a.cmd == "setup-nudity":
+        from . import nudity
+        cfg = nudity.settings(settings.get("nudity"))
+        det = nudity.load_model({**cfg, "auto_download": True})
+        if det is None:
+            sys.exit("Nudity check unavailable (see the message above); pip install onnxruntime")
+        print(f"Nudity check ready: {nudity.model_path(cfg)} ({det.engine})")
+        if a.clip:
+            print(json.dumps(nudity.check_clip(Path(a.clip), cfg, det), indent=2))
     elif a.cmd == "tiktok-app":
         from aiohttp import web
         from .tiktok.api import Config as TTConfig, TikTokError

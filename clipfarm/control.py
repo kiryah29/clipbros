@@ -419,12 +419,17 @@ class ControlPages:
                 rc = c.receipt
                 sig = ", ".join(f"{e(k)} {v:.2f}" for k, v in (rc.get("signals") or {}).items()
                                 if isinstance(v, (int, float)))
+                nd = rc.get("nudity") or {}
+                safety = (f"<br><span class='err'>HELD, check before posting: {e(str(nd.get('why', '')))}</span>"
+                          if c.status == "held" else
+                          f"<br><span class='mut'>nudity check: {e(str(nd.get('why', '')))}</span>"
+                          if nd.get("ranges") else "")
                 out.append(
                     f"<div class='card'><video controls playsinline preload='none' src='{url}.mp4'></video>"
                     f"<p><b>Clip #{c.id}</b> &middot; score {c.score:.1f} &middot; <b>{e(c.status)}</b><br>"
                     f"<span class='mut'>{e(str(rc.get('why', '')))}</span><br>"
                     f"<span class='mut'>triggers: {e(', '.join(rc.get('triggers', [])))} &middot; "
-                    f"hook: {e(str(rc.get('hook', '')))}</span><br><span class='mut'>signals: {sig}</span></p>"
+                    f"hook: {e(str(rc.get('hook', '')))}</span><br><span class='mut'>signals: {sig}</span>{safety}</p>"
                     f"<div class='row'><a class='btn ghost' href='{url}.mp4?dl=1'>Download</a>"
                     f"<form method='post' action='{url}/approve'><button>Approve</button></form>"
                     f"<form method='post' action='{url}/reject'><button class='ghost'>Reject</button></form></div></div>")
