@@ -37,7 +37,10 @@ It prints the chat pace every 10 s and any spike it would have clipped.
 1. `cp .env.example .env` and fill in what you need (Twitch chat works anonymously;
    YouTube needs `YOUTUBE_API_KEY`).
 2. In `config/channels.yaml`, enable a channel, set `platform`, and set the `facecam`
-   box (fractions of the source frame where the streamer's camera sits).
+   box (fractions of the source frame where the streamer's camera sits). Leave it out
+   (or run a channel that isn't listed, e.g. from the control page) and each clip is
+   searched for a face that stays put; the webcam overlay around it becomes the top band.
+   No face found means a gameplay-only reel. The receipt says which (`facecam_source`).
 3. Speech-to-text (once): `python -m clipfarm setup-speech` downloads a small model
    (~100 MB, into `models/`). Without it, speech scores 0 and everything else still works.
 4. `python -m clipfarm run`. Start it **before** the stream goes live, or add a `schedule`
@@ -109,6 +112,7 @@ with 1 false positive. Real chats are messier, so tune per channel in `channels.
 |-----------------------------|--------------|
 | `layout`                    | `facecam_top` (facecam band / gameplay / optional backdrop) or `gameplay_only` (blurred fill) |
 | `facecam_band_ratio`        | Height share of the facecam band |
+| `facecam_auto`              | Find the facecam in the clip when the channel has no `facecam` box (needs `opencv-python-headless`; model in `assets/models`) |
 | `backdrop`                  | Looping filler video under the gameplay (footage you own or licensed) |
 | `caption_style`             | `clipbros` (bold white caps, spoken word in lime), `pop`, `boxed`, `clean` |
 | `transcriber`               | `auto` (the live stream transcript, see Speech above), `faster_whisper`, or `none` |

@@ -13,6 +13,7 @@ from .config import channel_settings
 from .craft import render_reel
 from .audio import SAMPLE_RATE, AudioTracker, decode_pcm
 from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
+from .craft.facecam import detect_facecam
 from .detector import LagFilter, SpikeDetector, chat_values, score_spike
 from .models import Spike
 from .hooks import HookHistory, write_hook
@@ -152,12 +153,39 @@ def _paths(data_dir: Path, channel: str, clip_id: int) -> tuple[Path, Path, Path
         base / f"{clip_id:05d}_receipt.json"
 
 
+_found_facecams: dict[str, dict] = {}   # channel -> last facecam box auto-detected this run
+
+
+def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | None,
+                 detect=detect_facecam) -> tuple[dict | None, str]:
+    """Facecam box for this clip and where it came from: 'config' (channels.yaml),
+    'auto' (found in this clip), 'auto-last' (found in an earlier clip of this channel,
+    e.g. the streamer looked away here) or 'none' (gameplay_only layout)."""
+    if configured:
+        return configured, "config"
+    if reel_cfg.get("layout") != "facecam_top" or not reel_cfg.get("facecam_auto", True):
+        return None, "none"
+    band = reel_cfg["width"] / (reel_cfg["height"] * reel_cfg["facecam_band_ratio"])
+    box = detect(raw, aspect=band)
+    if box:
+        _found_facecams[channel] = box
+        return box, "auto"
+    if channel in _found_facecams:
+        return _found_facecams[channel], "auto-last"
+    return None, "none"
+
+
 def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                words=None) -> None:
     clip = queue.get(clip_id)
     raw = Path(clip.raw_path)
     reel = raw.with_name(raw.name.replace("_raw", "_reel"))
     try:
+        facecam, source = pick_facecam(raw, clip.channel, cfg["reel"], facecam)
+        if source == "none" and cfg["reel"].get("layout") == "facecam_top":
+            print(f"  no facecam found in clip {clip_id}: gameplay-only layout "
+                  f"(set facecam: for {clip.channel} in config/channels.yaml to force it)")
+        queue.update(clip_id, receipt={**clip.receipt, "facecam": facecam, "facecam_source": source})
         if words is None and clip.receipt.get("transcript") and \
                 cfg["reel"].get("transcriber", "auto") == "auto":
             words = [Word(*w) for w in clip.receipt["transcript"]]   # live stream transcript
