@@ -7,6 +7,8 @@ receipt is read for concrete details, most specific first:
   moment     the game profile's moment type (config/games/<game>.yaml hook_templates)
   phrase     an excited phrase the streamer said ("no way", "no x3" -> "NO NO NO")
   quote      a short line the streamer said right before the peak (transcript)
+  type       ClipAgent clip type: clutch / fail / rage / donation / chat_interaction
+             (before chat's reaction), hype / funny (after it)
   reaction   what chat spammed: laughing, W, L, shock, confusion, fear, RIP
   big        stream got very loud AND chat went far past a normal spike
   audio      loud on its own (screaming)
@@ -59,6 +61,19 @@ DEFAULT_TEMPLATES: dict[str, list[str]] = {
                  "Nobody knows what just happened"],
     "scared": ["Chat was scared for {streamer}", "{streamer} was NOT safe here"],
     "rip": ["RIP {streamer}", "It was over for {streamer}", "{streamer} never stood a chance"],
+    # ClipAgent clip types (agent.py)
+    "type_clutch": ["{streamer} actually clutched this", "Nobody thought {streamer} would survive",
+                    "The clutch of the stream"],
+    "type_fail": ["{streamer} had ONE job", "This went wrong so fast",
+                  "{streamer} will never live this down"],
+    "type_rage": ["{streamer} was SO done", "{streamer} almost rage quit",
+                  "{streamer} completely lost it"],
+    "type_donation": ["This donation broke {streamer}", "{streamer} was NOT ready for this donation",
+                      "Never send {streamer} a donation like this"],
+    "type_chat_interaction": ["Chat roasted {streamer}", "{streamer} read chat and regretted it",
+                              "Chat would not let this go"],
+    "type_hype": ["Chat went crazy for this", "{streamer} actually pulled this off"],
+    "type_funny": ["{streamer} had chat in tears", "Chat lost it at this"],
     "big": ["WAIT FOR IT...", "Watch till the end", "The ending is insane"],
     "audio": ["{streamer} was NOT ready for this", "{streamer} completely lost it",
               "Turn your sound up for this", "{streamer} screamed so loud"],
@@ -178,8 +193,14 @@ def _kinds(receipt: dict, cfg: dict, facts: dict) -> list[str]:
         kinds.append("phrase")
     if "quote" in facts:
         kinds.append("quote")
+    ctype = (receipt.get("clip_agent") or {}).get("clip_type")
+    specific = ctype in ("clutch", "fail", "rage", "donation", "chat_interaction")
+    if specific:
+        kinds.append(f"type_{ctype}")
     if "reaction" in facts:
         kinds.append(facts["reaction"])
+    if ctype in ("hype", "funny"):
+        kinds.append(f"type_{ctype}")
     if a >= need_a and c >= need_c:
         kinds.append("big")
     if a >= need_a or "audio" in trig:

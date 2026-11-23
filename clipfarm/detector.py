@@ -21,7 +21,8 @@ TOKEN_RE = re.compile(r"\S+")
 class SpikeDetector:
     def __init__(self, channel: str, cfg: dict, hype_tokens: Iterable[str] = (),
                  on_spike: Callable[[Spike], None] | None = None,
-                 classifier: Callable[[list[str]], dict | None] | None = None):
+                 classifier: Callable[[list[str]], dict | None] | None = None,
+                 analyzer: Callable[[list[str]], dict] | None = None):
         d = cfg
         self.channel = channel
         self.bucket = float(d["bucket_seconds"])
@@ -36,6 +37,7 @@ class SpikeDetector:
         self.hype = {t.lower() for t in hype_tokens}
         self.on_spike = on_spike
         self.classifier = classifier
+        self.analyzer = analyzer
 
         self.mean: float | None = None
         self.var = 0.0
@@ -146,6 +148,7 @@ class SpikeDetector:
             top_tokens=tokens.most_common(8), sample_messages=o["msgs"][:10],
             rate_curve=[round(r, 2) for r in curve],
             moment=self.classifier(o["msgs"]) if self.classifier else None,
+            chat_evidence=self.analyzer(o["msgs"]) if self.analyzer else None,
         )
         self.spikes.append(spike)
         if self.on_spike:

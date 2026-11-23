@@ -39,7 +39,8 @@ def classify(messages: Iterable[str], moments: list[dict]) -> dict | None:
         if best is None or rank > best["rank"]:
             best = {"name": m["name"], "label": m.get("label", m["name"]), "hits": hits,
                     "share": round(share, 3), "weight": float(m.get("weight", 1.0)),
-                    "rank": rank, "safety": m.get("safety", "ok")}
+                    "rank": rank, "safety": m.get("safety", "ok"),
+                    "clip_type": m.get("clip_type", "other")}
     if best:
         best.pop("rank")
     return best

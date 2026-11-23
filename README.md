@@ -89,6 +89,29 @@ value is its loudest 250 ms RMS, so a short yell isn't averaged away. Settings i
 The transcript of the clip window is saved in the receipt and used for the reel captions
 (`reel.transcriber: auto`). If the PC can't keep up it skips old chunks and says so.
 
+## ClipAgent check (`clipfarm/agent.py`)
+
+After a clip window is scored, ClipAgent decides whether it is really clip-worthy, labels
+it, and explains why. A keyword is evidence, never a trigger: one `Pog` in a busy chat
+counts for nothing, a bucket only counts when at least 10% of the spike's messages hit it.
+
+Six checks: chat keywords/emotes, chat speed spike, intense chat (30% of messages with
+`!`/`?`, or one emote in 30% of messages), audio spike (3x normal), a spoken trigger
+phrase, and a context event (game-profile moment, donation read, streamer reading chat,
+rage quit). A clip needs at least 2 checks, one of them a chat or audio spike.
+
+- **clip_type**: hype, funny, clutch, fail, rage, donation, chat_interaction or other,
+  voted on by the keyword buckets, phrases, context and game moment.
+- **confidence** 0..1: how many checks agree plus how strong the moment score is, minus
+  0.1 per conflict (chat laughing while the streamer rages; loud stream, quiet chat).
+- Clips under `clip_agent.min_confidence` (0.65) are skipped (`gate: false` keeps them).
+- Each clip gets `NNNNN_candidate.json` in the spec's JSON format next to its receipt.
+  `python -m clipfarm candidates` lists them ranked by confidence (`--all` adds the low ones).
+- Keyword lists live in `settings.yaml` under `clip_agent`. A game profile or channel can
+  replace a bucket, or add to it with `extra_chat_keywords` / `extra_speech_phrases`
+  (the GTA 6 profile adds LMAO, 💀, WASTED...).
+- The clip type also steers the hook card (`type_clutch`, `type_donation`, ... in hooks.py).
+
 ## How chat detection works (`clipfarm/detector.py`)
 
 * Chat is counted in 1 s buckets and smoothed over 3 buckets.
