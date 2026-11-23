@@ -112,7 +112,7 @@ with 1 false positive. Real chats are messier, so tune per channel in `channels.
 | `backdrop`                  | Looping filler video under the gameplay (footage you own or licensed) |
 | `caption_style`             | `clipbros` (bold white caps, spoken word in lime), `pop`, `boxed`, `clean` |
 | `transcriber`               | `auto` (the live stream transcript, see Speech above), `faster_whisper`, or `none` |
-| `hook_text` / `hook_seconds` | Hook card on the facecam/gameplay seam (`0` = whole clip). Game profiles pick a hook per moment |
+| `hooks`, `hook_text` / `hook_seconds` | Hook card on the facecam/gameplay seam (`0` = whole clip). Text is written per clip from what happened (`clipfarm/hooks.py`): moment type, what the streamer said, what chat spammed, loudness, chat speed; no repeats across the last 6 clips. `hook_text` is the fallback |
 | `cta_text`                  | End card (empty = none; a hard cut loops better) |
 | `accent_color`, `hook_bg`, `hook_color`, `show_logo`, `logo_height`, `logo` | ClipBros brand layer (`craft/overlay.py`, tokens in `brand.py`) |
 | `caption_words`, `caption_outline` | words on screen at once, Ink outline px |

@@ -5,13 +5,12 @@ chat words viewers type when it happens. When a spike closes, its messages are
 matched against those words. The best match:
   - feeds the game_events signal (share of messages that matched * weight, see signals.py)
   - picks the clip window (setup-heavy moments get a longer pre-roll)
-  - picks a hook line from the moment's templates
+  - gives hooks.py the moment's hook templates
   - flags moments that need a human safety look before posting
 Everything here is optional: a channel without a game profile behaves as before.
 """
 from __future__ import annotations
 
-import random
 import re
 from typing import Iterable
 
@@ -54,15 +53,6 @@ def _hit(key: str, msg: str) -> bool:
 
 def moment_def(moments: list[dict], name: str | None) -> dict:
     return next((m for m in moments if m["name"] == name), {})
-
-
-def pick_hook(moment: dict | None, moments: list[dict], fallback: str, streamer: str,
-              game: str, seed: int | None = None) -> str:
-    templates = moment_def(moments, (moment or {}).get("name")).get("hook_templates") or []
-    if not templates:
-        return fallback
-    t = random.Random(seed).choice(templates)
-    return t.format(streamer=streamer, game=game)
 
 
 def clip_window_for(moment: dict | None, moments: list[dict], clip_cfg: dict) -> dict:

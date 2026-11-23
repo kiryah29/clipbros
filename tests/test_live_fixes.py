@@ -3,7 +3,7 @@ from clipfarm.chat.twitch import TwitchChat
 from clipfarm.config import channel_settings, load_settings
 from clipfarm.craft.captions import Word, build_ass, drop_dialogue, group_words, looks_like_subtitle
 from clipfarm.detector import LagFilter
-from clipfarm.engine import trigger_hook
+from clipfarm.hooks import write_hook
 from clipfarm.models import ChatMessage
 
 S = load_settings()
@@ -59,17 +59,18 @@ def _cfg(**audio):
     return channel_settings(S, ch)
 
 
-def test_wait_for_it_only_on_big_audio_and_chat():
+def test_hook_kind_follows_trigger():
     cfg = _cfg(min_ratio=3.5)
+    hook = lambda r: write_hook(r, cfg, seed=1)
     big = {"triggers": ["chat"], "audio_ratio": 3.6, "chat_ratio": 6.0, "speech": {"phrases": []}}
-    assert trigger_hook(big, cfg) == "WAIT FOR IT..."
+    assert hook(big)[1] == "big"
     # clip 3 from the test: chat 3.6x, audio 2.4x, said "help"
     c3 = {"triggers": ["chat"], "audio_ratio": 2.4, "chat_ratio": 3.6,
           "speech": {"phrases": ["help"]}}
-    assert trigger_hook(c3, cfg) == 'CaseOh: "HELP"'
-    rep = {**c3, "speech": {"phrases": ["no x3"]}}
-    assert trigger_hook(rep, cfg) == 'CaseOh: "NO NO NO"'
+    text, kind = hook(c3)
+    assert kind == "phrase" and '"HELP"' in text
+    assert '"NO NO NO"' in hook({**c3, "speech": {"phrases": ["no x3"]}})[0]
     loud = {"triggers": ["audio"], "audio_ratio": 7, "chat_ratio": 1.6, "speech": {}}
-    assert trigger_hook(loud, cfg) == "CaseOh was NOT ready for this"
+    assert hook(loud)[1] == "audio"
     chat = {"triggers": ["chat"], "audio_ratio": 1.2, "chat_ratio": 4, "speech": {}}
-    assert trigger_hook(chat, cfg) == "Chat could NOT believe this"
+    assert hook(chat)[1] == "chat"

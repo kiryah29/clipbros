@@ -95,16 +95,22 @@ reel:
   logo: null                # null = brand-kit lockup drawn from code; or a PNG used as-is
   # keep-clear zones (px) for TikTok UI: side buttons on the right, caption/sound bar at the bottom
   safe_zone: {left: 62, top: 112, right: 124, bottom: 320}
-  # Hook card: a game-profile moment's own hook first. "WAIT FOR IT..." only when audio
-  # reaches the channel's audio spike level (audio.min_ratio) AND chat is at least
-  # wait_hook_chat_ratio x normal (2x the chat trigger). Otherwise trigger_hooks.
-  hook_text: "WAIT FOR IT..."
+  # Hook card text is written per clip from what happened (clipfarm/hooks.py), most
+  # specific first: game-profile moment, excited phrase, a quote from right before the
+  # peak, what chat spammed (laughing / W / L / shock / ? / RIP), then loudness or chat
+  # speed. The last few hooks of a channel are skipped so clips don't repeat a card.
+  # "WAIT FOR IT..." style hooks only when audio reaches audio.min_ratio (or
+  # wait_hook_audio_ratio) AND chat is at least wait_hook_chat_ratio x normal.
+  hook_text: "WAIT FOR IT..."   # last-resort fallback
   wait_hook_audio_ratio: null   # null = the channel's audio.min_ratio
   wait_hook_chat_ratio: 5.0
-  trigger_hooks:
-    phrase: '{streamer}: "{phrase}"'          # the excited phrase the streamer said
-    audio: "{streamer} was NOT ready for this"
-    chat: "Chat could NOT believe this"
+  hooks:
+    max_chars: 42           # longer lines get skipped (card fits 3 lines on 9:16)
+    max_quote_words: 6
+    reaction_share: 0.15    # a reaction must be at least this share of chat's top tokens
+    blocklist: []           # extra words never burned onto a clip (built-in list in hooks.py)
+    templates: {}           # override a kind's lines, e.g. {chat: ["Chat went {chat_x}x faster"]}
+                            # fields: {streamer} {game} {phrase} {quote} {chat_word} {chat_x} {moment}
   hook_seconds: 0           # 0 = hook card stays up the whole clip
   cta_text: "Follow for more clips"
   cta_seconds: 2.5
