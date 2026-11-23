@@ -130,7 +130,9 @@ class App:
         if clips:
             items = "".join(
                 f"<div class='card row'><div><b>Clip #{c.id}</b> &middot; {e(c.channel)}<br>"
-                f"<span class='mut'>score {c.score:.2f} &middot; {e(str(c.receipt.get('why', '')))}</span></div>"
+                f"<span class='mut'>score {c.score:.2f} &middot; {e(str(c.receipt.get('why', '')))}</span>"
+                + ("<br><span class='err'>Held by the nudity check: watch it before posting</span>"
+                   if c.status == "held" else "") + "</div>"
                 f"<a class='btn' style='margin-left:auto' href='/clip/{c.id}'>Review</a></div>" for c in clips)
         else:
             items = "<p class='mut'>No rendered clips yet. Run <code>python -m clipfarm demo</code> first.</p>"

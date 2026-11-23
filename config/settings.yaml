@@ -106,6 +106,29 @@ speech:
              "clip that", "clip it", "wtf", "insane", "i'm dead", "get out",
              "help", "bro what", "nah"]
 
+# Nudity check (clipfarm/nudity.py), runs on every clip before the reel is rendered.
+# Frames are scanned with NudeNet (~12 MB ONNX model, downloaded into models/ on first use or
+# with `python -m clipfarm setup-nudity`). Parts scoring >= blur_score are blurred in the reel
+# (gameplay only: facecam, hook card and captions stay sharp). The clip is HELD for a human
+# look (status "held") when a frame outside the blurred parts scores between review_score and
+# blur_score, when more than max_blur_share of the clip would be blurred, or when the check
+# cannot run (on_unavailable: review; set it to skip to render anyway).
+nudity:
+  enabled: true
+  model: models/nudenet_320n.onnx
+  auto_download: true
+  classes: [BUTTOCKS_EXPOSED, FEMALE_BREAST_EXPOSED, FEMALE_GENITALIA_EXPOSED,
+            MALE_GENITALIA_EXPOSED, ANUS_EXPOSED]   # shirtless men are fine on TikTok
+  sizes: [320, 640]         # 640 catches small figures in wide shots that 320 misses
+  sample_fps: 3             # frames scanned per second of clip
+  scan_width: 960           # frames are scaled to this width first
+  blur_score: 0.30
+  review_score: 0.26        # a shirtless man scores ~0.25 as FEMALE_BREAST_EXPOSED
+  pad_s: 0.5                # blur this much before/after the first/last flagged frame
+  merge_gap_s: 1.0          # blurred parts closer than this join into one
+  max_blur_share: 0.5
+  on_unavailable: review    # review = hold the clip | skip = render without the check
+
 reel:
   width: 1080
   height: 1920

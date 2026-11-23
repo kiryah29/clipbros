@@ -46,7 +46,7 @@ def channel_settings(settings: dict, channel: dict) -> dict:
     """Global settings < the channel's game profile < the channel's own overrides."""
     out = _deep_merge(settings, load_game(channel.get("game")))
     keys = ("detector", "clip", "ranking", "reel", "signals", "audio", "speech",
-            "clip_agent")
+            "clip_agent", "nudity")
     overrides = {k: channel[k] for k in keys if k in channel}
     out = _deep_merge(out, overrides)
     out.setdefault("moments", [])
