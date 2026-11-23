@@ -136,7 +136,8 @@ def _esc(s: str) -> str:
 
 
 def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out: Path,
-              chunk: int = 3, caption_x: int | None = None, max_w: int | None = None) -> Path:
+              chunk: int = 3, caption_x: int | None = None, max_w: int | None = None,
+              extra_styles: list[str] = (), extra_events: list[str] = ()) -> Path:
     W, H = cfg["width"], cfg["height"]
     cx = caption_x if caption_x is not None else W // 2
     max_w = max_w or W - 120
@@ -158,6 +159,7 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
         "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Caption,{font},{max_fs},{prim},{hi},{outl},{back},1,0,0,0,100,100,0,0,{border},{outline},2,5,60,60,0,1",
         f"Style: CTA,{font},64,{ink},{ink},{paper},{paper},1,0,0,0,100,100,0,0,3,20,0,2,80,80,420,1",
+        *extra_styles,
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
@@ -184,5 +186,6 @@ def build_ass(words: list[Word], duration: float, cfg: dict, caption_y: int, out
     if cfg.get("cta_text"):
         lines.append(f"Dialogue: 2,{_t(duration - cfg['cta_seconds'])},{_t(duration)},CTA,,0,0,0,,"
                      f"{{\\fad(200,0)}}{_esc(cfg['cta_text'])}")
+    lines.extend(extra_events)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return out

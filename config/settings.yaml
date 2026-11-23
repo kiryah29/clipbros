@@ -120,6 +120,14 @@ reel:
   caption_style: clipbros   # clipbros | pop | boxed | clean
   caption_size: 84          # max caption font px (long chunks shrink to fit)
   caption_y_ratio: 0.60     # caption line centre, as a share of height
+  # Twitch chat strip (facecam_top only): the live chat from the clip in a solid band right
+  # above TikTok's description bar; gameplay gets shorter to make room, backdrop is skipped
+  chat_strip: true
+  chat_strip_height: 272    # px; the strip ends at the bottom keep-clear zone
+  chat_lines: 3             # messages on screen at once, newest at the bottom
+  chat_font_size: 44
+  chat_min_gap_s: 0.7       # fast chat: at most one new line per this many seconds
+  chat_label: "TWITCH CHAT"
   caption_words: 4          # words on screen at once (brand kit shows 4)
   caption_outline: 5        # Ink outline px around Paper caption text
   caption_font: "Inter ExtraBold"   # bundled in assets/fonts

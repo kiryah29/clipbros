@@ -11,6 +11,7 @@ class ChatMessage:
     user: str
     text: str
     sent_ts: float | None = None   # platform's own send time (Twitch tmi-sent-ts), if known
+    color: str | None = None       # the user's name colour (Twitch color tag, #RRGGBB), if known
 
 
 @dataclass
