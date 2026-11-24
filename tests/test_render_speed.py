@@ -99,7 +99,7 @@ def test_craft_passes_the_lead_to_render_and_nudity_and_retimes_raw_words(tmp_pa
     q = ClipQueue(tmp_path / "q.db")
     cid = q.add("x", "twitch", 0, 30, 50, {"raw_lead_s": 1.5}, raw_path=str(tmp_path / "r.mp4"))
 
-    def nud(path, cfg, start=0.0):
+    def nud(path, cfg, start=0.0, **k):
         scanned["start"] = start
         return {"decision": "clean", "ranges": [], "why": "t"}
 
@@ -127,7 +127,7 @@ def test_clips_are_crafted_one_at_a_time(tmp_path, monkeypatch):
     ids = [q.add("x", "twitch", i, i + 30, 50, {}, raw_path=str(tmp_path / f"{i}.mp4"))
            for i in range(3)]
     cfg = {**CFG, "reel": {**CFG["reel"], "transcriber": "none"}}
-    clean = lambda p, c: {"decision": "clean", "ranges": [], "why": "t"}   # noqa: E731
+    clean = lambda p, c, **k: {"decision": "clean", "ranges": [], "why": "t"}   # noqa: E731
     threads = [threading.Thread(target=engine.craft_clip, args=(q, i, cfg, None),
                                 kwargs={"words": [], "nudity_check": clean}) for i in ids]
     for t in threads:

@@ -2,7 +2,8 @@
 
 Each finished buffer segment is decoded once to 16 kHz mono PCM (shared with the
 speech transcriber). Every second gets a loudness value: the loudest 250 ms RMS
-inside it, so a short scream isn't averaged away. A BaselineTrigger learns the
+inside it, so a short scream isn't averaged away. When a clip is crafted,
+`anchor_on_peak` re-times it around the loudest 250 ms window. A BaselineTrigger learns the
 streamer's normal loudness and fires when it jumps `min_ratio` x (3x amplitude is
 about +10 dB: a scream, an explosion, a sudden "NO WAY").
 """
@@ -46,6 +47,42 @@ def loudness_per_second(pcm: bytes, sample_rate: int = SAMPLE_RATE,
                 best = max(best, math.sqrt(sum(x * x for x in chunk) / len(chunk)) / 32768)
         out.append(round(best, 5))
     return out
+
+
+def window_levels(pcm: bytes, sample_rate: int = SAMPLE_RATE, window_s: float = 0.25) -> list[float]:
+    """RMS (0..1) of each consecutive `window_s` window."""
+    s = samples(pcm)
+    win = max(1, int(sample_rate * window_s))
+    return [math.sqrt(sum(x * x for x in s[w:w + win]) / len(s[w:w + win])) / 32768
+            for w in range(0, len(s), win) if s[w:w + win]]
+
+
+def anchor_on_peak(levels: list[float], window_s: float, lo: float, c: dict
+                   ) -> tuple[float, float, float] | None:
+    """(start, end, peak) in seconds for a clip anchored on the loudest window at or after
+    `lo`: start `anchor.pre_s` before the peak, end `anchor.post_s` after the reaction fades
+    (the last window still above median + fade_ratio x (peak - median) with no quiet gap
+    longer than fade_gap_s), then fitted to min/max_length_s without moving the start."""
+    a = {"pre_s": 4, "post_s": 7, "fade_ratio": 0.5, "fade_gap_s": 2.0, **(c.get("anchor") or {})}
+    first = int(lo / window_s)
+    if len(levels) - first < 2:
+        return None
+    peak_i = max(range(first, len(levels)), key=levels.__getitem__)
+    med = sorted(levels)[len(levels) // 2]
+    thr = med + float(a["fade_ratio"]) * (levels[peak_i] - med)
+    fade_i, gap = peak_i, int(float(a["fade_gap_s"]) / window_s)
+    for i in range(peak_i + 1, len(levels)):
+        if levels[i] >= thr:
+            fade_i = i
+        elif i - fade_i > gap:
+            break
+    total = len(levels) * window_s
+    peak = peak_i * window_s
+    start = max(0.0, peak - float(a["pre_s"]))
+    end = min(total, (fade_i + 1) * window_s + float(a["post_s"]))
+    end = min(max(end, start + float(c.get("min_length_s", 15))),
+              start + float(c.get("max_length_s", 30)), total)
+    return round(start, 2), round(end, 2), round(peak, 2)
 
 
 class AudioTracker:

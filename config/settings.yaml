@@ -15,9 +15,14 @@ detector:
                             # delivering its backlog) is left out, so it can't fake a spike
 
 clip:
-  pre_roll_s: 20            # chat reacts AFTER the moment, so look back
+  pre_roll_s: 12            # look-back searched for the moment: chat lags it by 3-8 s
   post_roll_s: 8
-  max_length_s: 60
+  max_length_s: 30          # reels are 15-30 s
+  min_length_s: 15
+  # The reel is re-timed on the loudest 250 ms of audio in that window (engine.py,
+  # audio.anchor_on_peak): it starts pre_s before the peak and ends post_s after the
+  # reaction fades, so the moment lands in the first ~5 s instead of at ~18 s.
+  anchor: {enabled: true, pre_s: 4, post_s: 7, fade_ratio: 0.5, fade_gap_s: 2}
   buffer_minutes: 5         # rolling video buffer kept on disk per channel
   quality: "1080p60,1080p,best"
 
@@ -86,7 +91,7 @@ audio:
   confirm: true             # audio-only clips also need chat >= confirm_chat_ratio or an excited phrase
   confirm_chat_ratio: 1.5
   silence_floor: 0.01       # quiet stretches don't drag "normal" below this (RMS 0..1)
-  pre_roll_s: 15            # a scream is AT the moment: shorter look-back than chat
+  pre_roll_s: 12            # look-back window; the reel itself is anchored on the peak
   post_roll_s: 12           # keep the reaction after the scream (6 s cut off "whoa whoa")
 
 speech:
@@ -108,11 +113,11 @@ speech:
 
 # Nudity check (clipfarm/nudity.py), runs on every clip before the reel is rendered.
 # Frames are scanned with NudeNet (~12 MB ONNX model, downloaded into models/ on first use or
-# with `python -m clipfarm setup-nudity`). Parts scoring >= blur_score are blurred in the reel
-# (gameplay only: facecam, hook card and captions stay sharp). The clip is HELD for a human
-# look (status "held") when a frame outside the blurred parts scores between review_score and
-# blur_score, when more than max_blur_share of the clip would be blurred, or when the check
-# cannot run (on_unavailable: review; set it to skip to render anyway).
+# with `python -m clipfarm setup-nudity`). Only the detected box is blurred, not the band.
+# Game footage needs game_blur_score (GTA characters score 0.3-0.5); a hit on the facecam
+# (a real person) needs blur_score. The clip is HELD for a human look (status "held") only
+# when a facecam frame scores review_score or more, or when the check cannot run
+# (on_unavailable: review; set it to skip to render anyway).
 nudity:
   enabled: true
   model: models/nudenet_320n.onnx
@@ -122,17 +127,22 @@ nudity:
   sizes: [320, 640]         # 640 catches small figures in wide shots that 320 misses
   sample_fps: 3             # frames scanned per second of clip
   scan_width: 960           # frames are scaled to this width first
-  blur_score: 0.30
+  blur_score: 0.30          # facecam (real person)
   review_score: 0.26        # a shirtless man scores ~0.25 as FEMALE_BREAST_EXPOSED
+  game_blur_score: 0.50     # gameplay: higher, game characters fire at 0.3-0.5
+  box_pad: 0.15             # grow the blurred box by this share of its size
   pad_s: 0.5                # blur this much before/after the first/last flagged frame
   merge_gap_s: 1.0          # blurred parts closer than this join into one
-  max_blur_share: 0.5
   on_unavailable: review    # review = hold the clip | skip = render without the check
 
 reel:
   width: 1080
   height: 1920
-  layout: facecam_top       # facecam_top | gameplay_only
+  layout: facecam_top       # facecam_top | gameplay_only | full_cam (just chatting)
+  full_cam_face: 0.18       # auto-found face this tall (share of frame) = full-camera stream:
+                            # one full-height crop on the streamer instead of two bands
+  gameplay_zoom: 1.25       # gameplay band crops this much tighter than filling it, so HUD,
+                            # minimap and the streamer's chat overlay at the edges are left out
   facecam_band_ratio: 0.30  # share of height given to the facecam band
   facecam_auto: true        # channel has no facecam: in channels.yaml? find it in the clip
                             # (needs opencv-python-headless); none found = gameplay_only
@@ -160,8 +170,9 @@ reel:
   accent_color: "#C8F03C"   # Clip Lime: seam line + highlighted caption word
   hook_bg: "#F3F0E8"        # Paper: hook card fill
   hook_color: "#131119"     # Ink: hook card text
-  show_logo: true           # ClipBros lockup top-left
-  logo_height: 44           # lockup mark height px (lockup ~220 px wide; kit minimum is 120)
+  show_logo: true           # ClipBros lockup bottom-left of the gameplay (faces are up top)
+  logo_height: 32           # lockup mark height px (lockup ~160 px wide)
+  logo_opacity: 0.6
   logo: null                # null = brand-kit lockup drawn from code; or a PNG used as-is
   # keep-clear zones (px) for TikTok UI: side buttons on the right, caption/sound bar at the bottom
   safe_zone: {left: 62, top: 112, right: 124, bottom: 320}
@@ -187,3 +198,5 @@ reel:
   cta_text: "Follow for more clips"
   cta_seconds: 2.5
   transcriber: auto         # auto = live stream transcript | faster_whisper | none
+  loudness: {I: -14, TP: -1.5, LRA: 11}   # loudnorm target (two-pass) after a light compressor
+  compressor: "acompressor=threshold=-12dB:ratio=2:attack=5:release=150"

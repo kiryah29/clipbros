@@ -16,7 +16,7 @@ def _spike(moment=None):
 def test_game_profile_merges_under_channel_overrides():
     assert CFG["reel"]["caption_style"] == "clipbros"
     assert CFG["reel"]["cta_text"] == ""
-    assert CFG["clip"]["post_roll_s"] == 4
+    assert CFG["clip"]["post_roll_s"] == 8 and CFG["clip"]["max_length_s"] == 30
     assert CFG["streamer"] == "Jason"
     assert {m["name"] for m in CFG["moments"]} >= {"police_escalation", "graphic_shock"}
     over = channel_settings(load_settings(), {"name": "x", "game": "gta6",
@@ -40,11 +40,11 @@ def test_classify_none_on_unrelated_chat():
     assert classify(["gg", "hi chat", "o7", "true"] * 5, CFG["moments"]) is None
 
 
-def test_escalation_gets_long_preroll_and_hook():
+def test_escalation_window_and_hook():
     m = classify(["cops!!", "police", "wanted lol", "RUN"], CFG["moments"])
     sp = _spike(m)
     start, end = clip_window(sp, CFG["clip"], CFG["moments"])
-    assert sp.peak_ts - start == 45 and end - start <= 60
+    assert sp.peak_ts - start == 12 and end - start <= 30
     r = build_receipt(sp, CFG)
     assert r["hook"] and "{" not in r["hook"] and r["safety_review"] is False
 

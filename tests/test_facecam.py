@@ -16,9 +16,28 @@ def _fresh_memory():
     engine._found_facecams.clear()
 
 
-def test_configured_box_wins_and_skips_detection():
+def test_configured_box_is_the_fallback_when_no_face_is_found():
+    box, src = engine.pick_facecam("raw.mp4", "xqc", REEL, BOX, detect=lambda *a, **k: None)
+    assert (box, src) == (BOX, "config")
+
+
+def test_face_inside_the_configured_box_is_framed_tighter():
+    tight = {"x": 0.02, "y": 0.15, "w": 0.15, "h": 0.12}
+    box, src = engine.pick_facecam("raw.mp4", "xqc", REEL, BOX, detect=lambda *a, **k: tight)
+    assert (box, src) == (tight, "auto")
+
+
+def test_face_outside_the_configured_box_is_someone_else():
+    # kaicenat 19:51 run: Speed's cam (a guest) was picked and the hook said "kaicenat"
+    guest = {"x": 0.75, "y": 0.05, "w": 0.2, "h": 0.2}
+    box, src = engine.pick_facecam("raw.mp4", "kaicenat", REEL, BOX, detect=lambda *a, **k: guest)
+    assert (box, src) == (BOX, "config")
+
+
+def test_no_detection_when_the_layout_has_no_facecam_band():
     called = []
-    box, src = engine.pick_facecam("raw.mp4", "xqc", REEL, BOX, detect=lambda *a, **k: called.append(1))
+    box, src = engine.pick_facecam("raw.mp4", "xqc", {**REEL, "layout": "gameplay_only"}, BOX,
+                                   detect=lambda *a, **k: called.append(1))
     assert (box, src, called) == (BOX, "config", [])
 
 

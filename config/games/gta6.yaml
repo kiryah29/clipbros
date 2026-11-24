@@ -16,10 +16,10 @@
 game_name: "GTA 6"
 
 clip:
-  pre_roll_s: 25            # default; moments below override it
-  post_roll_s: 4            # hard cut soon after the reaction (loops better)
-  max_length_s: 60
-  min_length_s: 20
+  pre_roll_s: 12            # look-back; the reel is anchored on the audio peak (settings.yaml)
+  post_roll_s: 8            # room after the peak for the reaction to fade
+  max_length_s: 30          # review of 41 clips: 40 s+ clips lost viewers before the moment
+  min_length_s: 15
 
 ranking:
   hype_tokens: ["LUL", "KEKW", "OMEGALUL", "LMAO", "LMFAO", "W", "CLIP", "NAHH",
@@ -47,8 +47,8 @@ moments:
     clip_type: hype
     label: "cops / wanted level / chase"
     weight: 1.3
-    pre_roll_s: 45          # setup matters: show the crime before the cops arrive
-    post_roll_s: 4
+    pre_roll_s: 12
+    post_roll_s: 8
     chat_keywords: [cops, cop, police, 5 star, five star, wanted, chase, run, arrested,
                     busted, swat, getaway, 🚓, 🚨]
     hook_templates:
@@ -62,8 +62,8 @@ moments:
     clip_type: hype
     label: "new GTA 6 mechanic"
     weight: 1.2
-    pre_roll_s: 30
-    post_roll_s: 5
+    pre_roll_s: 12
+    post_roll_s: 8
     chat_keywords: [new, didn't know, didnt know, no way, how, realistic, details, detail,
                     insane, tesla, ai, lucia, jason, switch, rockstar, next gen, physics]
     hook_templates:
@@ -76,8 +76,8 @@ moments:
     clip_type: fail
     label: "chaos / fail / ragdoll"
     weight: 1.1
-    pre_roll_s: 30
-    post_roll_s: 4
+    pre_roll_s: 12
+    post_roll_s: 8
     chat_keywords: [fail, crash, ragdoll, scooter, flew, fell, ded, dead, wasted,
                     skill issue, bro what, how did he]
     hook_templates:
@@ -91,8 +91,8 @@ moments:
     clip_type: funny
     label: "big reaction / let-down"
     weight: 1.0
-    pre_roll_s: 15
-    post_roll_s: 3
+    pre_roll_s: 12
+    post_roll_s: 8
     # specific words only: generic hype (LMAO, KEKW, 😂) is already in hype_tokens
     chat_keywords: [scream, screaming, my ears, ears, deaf, bro thought, he thought,
                     thought he, "thats lapis", "that's it", fake, bait]
@@ -107,8 +107,8 @@ moments:
     label: "graphic violence (review)"
     weight: 0.6
     safety: review
-    pre_roll_s: 15
-    post_roll_s: 3
+    pre_roll_s: 12
+    post_roll_s: 8
     chat_keywords: [blood, gore, head, headless, decapitated, dismember, brutal, shotgun]
     hook_templates:
       - "{game} was NOT ready for {streamer}"
