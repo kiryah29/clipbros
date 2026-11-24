@@ -67,8 +67,9 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     return lines
 
 
-def draw_base(cfg: dict, seam_y: int | None, out: Path) -> Path:
-    """Always-on layer: logo + lime seam line."""
+def draw_base(cfg: dict, seam_y: int | None, out: Path, logo_bottom: int | None = None) -> Path:
+    """Always-on layer: logo + lime seam line. logo_bottom: y the logo sits on (bottom-left
+    of the gameplay, where the streamer's face never is); None = top-left."""
     W, H = cfg["width"], cfg["height"]
     accent = hex_rgb(cfg.get("accent_color", brand.LIME))
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -77,13 +78,14 @@ def draw_base(cfg: dict, seam_y: int | None, out: Path) -> Path:
         t = int(cfg.get("seam_thickness", 6))
         d.rectangle([0, seam_y - t // 2, W, seam_y + t - t // 2], fill=(*accent, 255))
     if cfg.get("show_logo", True):
-        _place_logo(img, cfg)
+        _place_logo(img, cfg, logo_bottom)
     img.save(out)
     return out
 
 
-def _place_logo(img: Image.Image, cfg: dict) -> None:
-    """Primary lockup top-left. A custom `logo` PNG replaces it untouched (never recoloured).
+def _place_logo(img: Image.Image, cfg: dict, bottom: int | None = None) -> None:
+    """Primary lockup top-left, or bottom-left on `bottom`, at `logo_opacity`. A custom
+    `logo` PNG replaces it untouched (never recoloured).
 
     The kit forbids outlining the wordmark, so legibility over busy facecams comes from a
     soft Ink shadow only."""
@@ -97,6 +99,11 @@ def _place_logo(img: Image.Image, cfg: dict) -> None:
         logo = brand.lockup(h, "ink")
     pad = brand.clear_space(h)
     x, y = left + pad, top + pad
+    if bottom is not None:
+        y = bottom - pad - logo.height
+    opacity = float(cfg.get("logo_opacity", 1.0))
+    if opacity < 1:
+        logo.putalpha(logo.getchannel("A").point(lambda a: int(a * opacity)))
     shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
     ink = (*hex_rgb(brand.INK), 0)
     sh = Image.new("RGBA", logo.size, ink)

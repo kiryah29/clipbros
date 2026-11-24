@@ -218,4 +218,5 @@ def detect_facecam(path: Path, samples: int = 8, min_share: float = 0.4,
     if aspect:
         x0, y0, x1, y1 = fit_aspect((x0, y0, x1, y1), face, aspect, face_at=0.4, frame=(W, H))
     return {"x": round(x0 / W, 4), "y": round(y0 / H, 4),
-            "w": round((x1 - x0) / W, 4), "h": round((y1 - y0) / H, 4)}
+            "w": round((x1 - x0) / W, 4), "h": round((y1 - y0) / H, 4),
+            "face": round(face[3] / H, 4)}   # face height share: big = full-camera stream

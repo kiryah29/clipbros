@@ -20,6 +20,42 @@ channels:
     facecam: {x: 0.0, y: 0.0, w: 0.25, h: 0.25}   # measure from a real frame before enabling
     schedule: []
 
+  # Regulars. enabled: false = only clipped when started from the control page.
+  # The facecam box is the fallback: a face found inside it is framed tighter, a face found
+  # anywhere else (a guest's cam) is ignored, so the reel never shows the wrong streamer.
+  - name: ishowspeed
+    platform: twitch
+    enabled: false
+    game: gta6
+    streamer: "Speed"
+    facecam: {x: 0.0, y: 0.355, w: 0.225, h: 0.28}   # GTA 6 layout, measured 2026-11-22
+    schedule: []
+
+  - name: caseoh_
+    platform: twitch
+    enabled: false
+    game: gta6
+    streamer: "CaseOh"
+    facecam: {x: 0.0, y: 0.126, w: 0.213, h: 0.278}  # GTA 6 layout, measured 2026-11-24
+    audio: {min_ratio: 3.5}   # loud game vs voice
+    schedule: []
+
+  - name: cohhcarnage
+    platform: twitch
+    enabled: false
+    game: gta6
+    streamer: "Cohh"
+    facecam: {x: 0.0, y: 0.40, w: 0.23, h: 0.27}     # borderless cam, measured 2026-11-24
+    schedule: []
+
+  - name: lydiaviolet        # just chatting: the camera is the whole stream
+    platform: twitch
+    enabled: false
+    streamer: "Lydia"
+    facecam: {x: 0.15, y: 0.0, w: 0.6, h: 1.0}       # the room left of her chat overlay; the crop centres on it
+    reel: {layout: full_cam}
+    schedule: []
+
   - name: some_twitch_channel
     platform: twitch
     enabled: false

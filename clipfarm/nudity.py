@@ -4,10 +4,11 @@
 2. Run NudeNet's exposed-body-part detector on each frame (ONNX; onnxruntime when installed,
    else OpenCV's DNN module, both run on the Windows ARM64 PC). Small figures in wide shots
    are missed at 320 px, so each frame runs at every size in `sizes` and the highest score wins.
-3. Frames scoring >= blur_score become blur ranges (padded, merged); the reel blurs the
-   gameplay in those ranges (craft/reel.py), the facecam, captions and hook stay sharp.
-   Frames between review_score and blur_score, too much of the clip blurred, or no model
-   at all hold the clip for a human look (status "held") instead of guessing.
+3. Only the detected box is blurred, over padded, merged time ranges (craft/reel.py).
+   Game footage (anything outside the facecam) needs game_blur_score: GTA characters score
+   0.3-0.5 and used to blur the whole band. A hit on the facecam (a real person; the whole
+   frame on a full-camera stream) uses blur_score, and any facecam frame at review_score or
+   more, or no model at all, holds the clip for a human look (status "held").
 
 The model (NudeNet 320n, ~12 MB) is downloaded into models/ on first use, or with
 `python -m clipfarm setup-nudity`.
@@ -49,9 +50,10 @@ DEFAULTS = {
     "scan_width": 960,
     "blur_score": 0.30,
     "review_score": 0.26,
+    "game_blur_score": 0.50,
+    "box_pad": 0.15,
     "pad_s": 0.5,
     "merge_gap_s": 1.0,
-    "max_blur_share": 0.5,
     "on_unavailable": "review",
 }
 
@@ -76,32 +78,56 @@ def merge_ranges(times: list[float], pad: float, gap: float, dur: float) -> list
     return [[round(a, 2), round(b, 2)] for a, b in out]
 
 
-def decide(scores: list[tuple[float, float, str]], dur: float, cfg: dict) -> dict:
-    """scores: (time s, best score, label) per sampled frame. Returns the check result:
-    decision clean | blur | review, blur ranges, and why."""
+def _overlap(box: list[float], cam: dict) -> float:
+    """Share of `box` [x, y, w, h] (fractions) that lies inside the facecam box."""
+    x, y, w, h = box
+    ix = max(0.0, min(x + w, cam["x"] + cam["w"]) - max(x, cam["x"]))
+    iy = max(0.0, min(y + h, cam["y"] + cam["h"]) - max(y, cam["y"]))
+    return ix * iy / (w * h) if w * h > 0 else 0.0
+
+
+def _union(boxes: list, pad: float) -> list[float] | None:
+    """Padded box around all `boxes`; None (= whole frame) if any hit has no box."""
+    if not boxes or any(b is None for b in boxes):
+        return None
+    x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+    x1, y1 = max(b[0] + b[2] for b in boxes), max(b[1] + b[3] for b in boxes)
+    px, py = (x1 - x0) * pad, (y1 - y0) * pad
+    x0, y0, x1, y1 = max(0.0, x0 - px), max(0.0, y0 - py), min(1.0, x1 + px), min(1.0, y1 + py)
+    return [round(x0, 4), round(y0, 4), round(x1 - x0, 4), round(y1 - y0, 4)]
+
+
+def decide(scores: list[tuple], dur: float, cfg: dict, facecam: dict | None = None,
+           full_cam: bool = False) -> dict:
+    """scores: (time s, best score, label[, box]) per sampled frame, box = [x, y, w, h] as
+    fractions of the frame. Returns the check result: decision clean | blur | review, blur
+    ranges [start, end, box or None = whole frame], and why."""
     c = settings(cfg)
-    hits = [(t, s, lab) for t, s, lab in scores if s >= c["blur_score"]]
-    ranges = merge_ranges([t for t, _, _ in hits], c["pad_s"], c["merge_gap_s"], dur)
-    # unsure frames already inside a blur range are covered; the rest need a human look
-    unsure = [(t, s, lab) for t, s, lab in scores if c["review_score"] <= s < c["blur_score"]
-              and not any(a <= t <= b for a, b in ranges)]
-    blurred = sum(b - a for a, b in ranges)
+    rows = [(r[0], r[1], r[2], r[3] if len(r) > 3 else None) for r in scores]
+
+    def on_cam(box) -> bool:   # a real person, not a game character
+        return full_cam or bool(facecam and box and _overlap(box, facecam) >= 0.3)
+
+    hits = [r for r in rows
+            if r[1] >= (c["blur_score"] if on_cam(r[3]) else c["game_blur_score"])]
+    ranges = [[a, b, _union([r[3] for r in hits if a <= r[0] <= b], float(c["box_pad"]))]
+              for a, b in merge_ranges([r[0] for r in hits], c["pad_s"], c["merge_gap_s"], dur)]
+    # only the facecam holds a clip: game footage is blurred or left alone
+    unsure = [r for r in rows if r[1] >= c["review_score"] and on_cam(r[3])]
     reasons = []
     if unsure:
-        reasons.append(f"{len(unsure)} frame(s) might show nudity "
-                       f"({', '.join(sorted({lab for _, _, lab in unsure}))})")
-    if dur and blurred / dur > c["max_blur_share"]:
-        reasons.append(f"{blurred:.1f}s of {dur:.1f}s would be blurred")
+        reasons.append(f"{len(unsure)} facecam frame(s) might show nudity "
+                       f"({', '.join(sorted({r[2] for r in unsure}))})")
     decision = "review" if reasons else ("blur" if ranges else "clean")
     return {
         "decision": decision,
         "ranges": ranges,
-        "labels": sorted({lab for _, _, lab in hits}),
-        "max_score": round(max((s for _, s, _ in scores), default=0.0), 3),
-        "frames": len(scores),
-        "unsure": [[round(t, 2), round(s, 3), lab] for t, s, lab in unsure],
+        "labels": sorted({r[2] for r in hits}),
+        "max_score": round(max((r[1] for r in rows), default=0.0), 3),
+        "frames": len(rows),
+        "unsure": [[round(t, 2), round(s, 3), lab] for t, s, lab, _ in unsure],
         "why": "; ".join(reasons) or (f"blurred {len(ranges)} part(s): " + ", ".join(
-            f"{a:.1f}-{b:.1f}s" for a, b in ranges) if ranges else "no nudity found"),
+            f"{a:.1f}-{b:.1f}s" for a, b, _ in ranges) if ranges else "no nudity found"),
     }
 
 
@@ -147,6 +173,10 @@ class Detector:
             self.engine = "opencv"
 
     def scores(self, img, size: int):
+        return self.detect(img, size)[0]
+
+    def detect(self, img, size: int):
+        """(class scores (n, 18), boxes (n, 4) as [x, y, w, h] fractions of img)."""
         H, W = img.shape[:2]
         m = max(H, W)
         sq = np.zeros((m, m, 3), np.uint8)       # pad to a square, bottom/right (as NudeNet)
@@ -163,7 +193,10 @@ class Detector:
         else:
             self._net.setInput(np.ascontiguousarray(blob))
             out = self._net.forward()
-        return out[0].T[:, 4:]
+        rows = out[0].T
+        cx, cy, bw, bh = (rows[:, i] * m / size for i in range(4))
+        boxes = np.stack([(cx - bw / 2) / W, (cy - bh / 2) / H, bw / W, bh / H], axis=1)
+        return rows[:, 4:], boxes
 
 
 def load_model(cfg: dict) -> Detector | None:
@@ -187,16 +220,23 @@ def load_model(cfg: dict) -> Detector | None:
     return _model
 
 
-def frame_score(det: Detector, img, cfg: dict) -> tuple[float, str]:
+def frame_score(det: Detector, img, cfg: dict) -> tuple[float, str, list | None]:
+    """Best score over the configured classes and sizes, its label and its box (None when
+    the detector gives no boxes)."""
     c = settings(cfg)
     cls = [LABELS.index(k) for k in c["classes"] if k in LABELS]
-    best, label = 0.0, ""
+    best, label, box = 0.0, "", None
     for size in c["sizes"]:
-        sc = det.scores(img, int(size))[:, cls].max(axis=0)
-        i = int(sc.argmax())
-        if sc[i] > best:
-            best, label = float(sc[i]), c["classes"][i]
-    return best, label
+        if hasattr(det, "detect"):
+            sc, boxes = det.detect(img, int(size))
+        else:
+            sc, boxes = det.scores(img, int(size)), None
+        sc = sc[:, cls]
+        a, k = np.unravel_index(int(sc.argmax()), sc.shape)
+        if sc[a, k] > best:
+            best, label = float(sc[a, k]), c["classes"][k]
+            box = None if boxes is None else [round(float(v), 4) for v in boxes[a]]
+    return best, label, box
 
 
 # ------------------------------------------------------------------ clip scan
@@ -230,9 +270,11 @@ def frames(path: Path, fps: float, width: int, start: float = 0.0):
 
 
 def check_clip(path: Path, cfg: dict | None, detector: Detector | None = None,
-               start: float = 0.0) -> dict:
+               start: float = 0.0, facecam: dict | None = None, full_cam: bool = False) -> dict:
     """Scan the clip and decide: clean, blur these ranges, or hold for review.
-    start: skip this many seconds of lead-in (ranges are then timed from there)."""
+    start: skip this many seconds of lead-in (ranges are then timed from there).
+    facecam: the reel's facecam box; hits there are a real person. full_cam: the whole
+    frame is the camera (just chatting)."""
     c = settings(cfg)
     if not c["enabled"]:
         return {"decision": "skipped", "ranges": [], "why": "nudity check disabled"}
@@ -248,13 +290,21 @@ def check_clip(path: Path, cfg: dict | None, detector: Detector | None = None,
         return unavailable(c, f"{type(e).__name__}: {e}")
     if not scores:
         return unavailable(c, "no frames could be read")
-    return decide(scores, dur, c)
+    return decide(scores, dur, c, facecam, full_cam)
 
 
-def blur_filter(ranges: list[list[float]]) -> str:
-    """ffmpeg filter that strongly blurs the whole frame inside `ranges` (empty = none)."""
+def blur_graph(ranges: list, src: str, dst: str) -> list[str]:
+    """ffmpeg filtergraph lines from `src` to `dst` that strongly blur each range's box
+    [start, end, [x, y, w, h] or None = whole frame] while the range is on screen."""
     if not ranges:
-        return ""
-    when = "+".join(f"between(t\\,{a:.2f}\\,{b:.2f})" for a, b in ranges)
-    return (f"boxblur=luma_radius='min(w\\,h)/10':luma_power=3:"
-            f"chroma_radius='min(cw\\,ch)/10':chroma_power=3:enable='{when}'")
+        return [f"{src}null{dst}"]
+    out = [f"{src}split={len(ranges) + 1}[nz0]" + "".join(f"[nc{i}]" for i in range(len(ranges)))]
+    for i, (a, b, *rest) in enumerate(ranges):
+        x, y, w, h = rest[0] if rest and rest[0] else [0, 0, 1, 1]
+        nxt = dst if i == len(ranges) - 1 else f"[nz{i + 1}]"
+        out.append(f"[nc{i}]crop=trunc(iw*{w}/2)*2:trunc(ih*{h}/2)*2:iw*{x}:ih*{y},"
+                   f"boxblur=luma_radius='min(w\\,h)/6':luma_power=3:"
+                   f"chroma_radius='min(cw\\,ch)/6':chroma_power=3[nb{i}]")
+        out.append(f"[nz{i}][nb{i}]overlay=main_w*{x}:main_h*{y}:"
+                   f"enable='between(t\\,{a:.2f}\\,{b:.2f})'{nxt}")
+    return out

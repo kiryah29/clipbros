@@ -14,7 +14,7 @@ from .chat.simulated import DEMO_LINES, SimulatedChat
 from .config import channel_settings
 from .craft import render_reel
 from .agent import below_floor, candidate_json, chat_evidence, evaluate
-from .audio import SAMPLE_RATE, AudioTracker, decode_pcm
+from .audio import SAMPLE_RATE, AudioTracker, anchor_on_peak, decode_pcm, window_levels
 from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
 from .craft.facecam import detect_facecam
 from .nudity import check_clip as check_nudity
@@ -198,17 +198,28 @@ def _craft_queue() -> asyncio.Lock:
     return _craft_turns.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
 
 
+def _centre_inside(box: dict, outer: dict) -> bool:
+    cx, cy = box["x"] + box["w"] / 2, box["y"] + box["h"] / 2
+    return outer["x"] <= cx <= outer["x"] + outer["w"] and outer["y"] <= cy <= outer["y"] + outer["h"]
+
+
 def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | None,
                  detect=detect_facecam) -> tuple[dict | None, str]:
     """Facecam box for this clip and where it came from: 'config' (channels.yaml),
     'auto' (found in this clip), 'auto-last' (found in an earlier clip of this channel,
-    e.g. the streamer looked away here) or 'none' (gameplay_only layout)."""
-    if configured:
-        return configured, "config"
-    if reel_cfg.get("layout") != "facecam_top" or not reel_cfg.get("facecam_auto", True):
-        return None, "none"
+    e.g. the streamer looked away here) or 'none' (gameplay_only layout).
+    A configured box is the fallback: the face found in the clip is only used when it sits
+    inside that box (same cam, framed tighter). No steady face, or a face somewhere else
+    (a guest's cam when two streamers play together), means the configured box."""
+    auto = reel_cfg.get("layout") == "facecam_top" and reel_cfg.get("facecam_auto", True)
+    if not auto:
+        return (configured, "config") if configured else (None, "none")
     band = reel_cfg["width"] / (reel_cfg["height"] * reel_cfg["facecam_band_ratio"])
     box = detect(raw, aspect=band)
+    if configured:
+        if box and _centre_inside(box, configured):
+            return box, "auto"
+        return configured, "config"
     if box:
         _found_facecams[channel] = box
         return box, "auto"
@@ -247,14 +258,30 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                      if w.start >= lead]
         if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
             words = drop_dialogue(words, [t - lead for t in subtitle_times(raw, box)])
+        # re-time the clip around the loudest 250 ms (chat reacts seconds after the moment)
+        shift, length, anchor = 0.0, None, None
+        if (cfg["clip"].get("anchor") or {}).get("enabled", True):
+            a = anchor_on_peak(window_levels(decode_pcm(raw)), 0.25, lead, cfg["clip"])
+            if a:
+                shift, length = a[0] - lead, a[1] - a[0]
+                anchor = {"shift_s": round(shift, 2), "length_s": round(length, 2),
+                          "peak_s": round(a[2] - a[0], 2)}
+        lead += shift
+        words = [Word(w.text, w.start - shift, w.end - shift) for w in words or []]
+        chat = [[m[0] - shift, *m[1:]] for m in clip.receipt.get("chat") or []]
+        reel_cfg = cfg["reel"]
+        if facecam and reel_cfg["layout"] == "facecam_top" and \
+                facecam.get("face", 0) >= float(reel_cfg.get("full_cam_face", 0.18)):
+            reel_cfg = {**reel_cfg, "layout": "full_cam"}   # just chatting: the cam IS the stream
+        full_cam = reel_cfg["layout"] == "full_cam"
         # scan only the clip window, so the ranges line up with the reel
-        safety = nudity_check(raw, cfg.get("nudity"), start=lead) if lead else \
-            nudity_check(raw, cfg.get("nudity"))
-        receipt = {**queue.get(clip_id).receipt, "nudity": safety}
+        safety = nudity_check(raw, cfg.get("nudity"), start=lead, facecam=facecam,
+                              full_cam=full_cam)
+        receipt = {**queue.get(clip_id).receipt, "nudity": safety, "anchor": anchor}
         if safety["decision"] != "clean":
             print(f"  nudity check clip {clip_id}: {safety['decision']} ({safety['why']})")
-        render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"),
-                    chat=clip.receipt.get("chat"), censor=safety.get("ranges"), lead=lead)
+        render_reel(raw, reel, reel_cfg, facecam, words, hook_text=clip.receipt.get("hook"),
+                    chat=chat, censor=safety.get("ranges"), lead=lead, length=length)
         status = "held" if safety["decision"] == "review" else "crafted"
         queue.update(clip_id, reel_path=str(reel), status=status, receipt=receipt)
     except Exception as e:
