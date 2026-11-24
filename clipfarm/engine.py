@@ -28,6 +28,10 @@ from .scheduler import in_window
 from .signals import score_signals, strength
 from .speech import SpeechTracker, make_transcriber
 
+NO_VIDEO_TIMEOUT_S = 45     # no buffered video this long after (re)starting = recorder is stuck
+RECORDER_RETRIES = 2        # restarts before a run gives up on the stream
+RECORDER_RETRY_WAIT_S = 15
+
 
 def _fit(start: float, end: float, c: dict) -> tuple[float, float]:
     if end - start > c["max_length_s"]:
@@ -369,6 +373,7 @@ class ChannelWorker:
         self.audio: AudioTracker | None = None
         self.speech: SpeechTracker | None = None
         self.transcriber = None
+        self.failure: str | None = None   # why recording gave up, if it did
 
     def _trigger(self, kind: str, start: float, end: float, **what) -> None:
         m, new = self.book.add(start, end, kind, **what)
@@ -546,22 +551,38 @@ class ChannelWorker:
                       f"normal {base}{loud} | {'SPIKE OPEN' if d.open else 'watching'}{late}")
                 self.msg_count = self.late_count = 0
             if isinstance(self.recorder, LiveRecorder):
-                self.recorder.prune()
-                if not self.recorder.running:
-                    print(f"[{name}] stream recorder exited (stream offline?)")
-                    return
+                rec = self.recorder
+                rec.prune()
+                problem = None
+                if not rec.running:
+                    problem = "stream recorder exited (stream offline?)"
+                elif not rec.segments() and time.time() - rec.started_at > NO_VIDEO_TIMEOUT_S:
+                    problem = f"no video from the stream after {NO_VIDEO_TIMEOUT_S} s"
+                if problem:
+                    why = f"{problem}; streamlink said: {rec.last_error or 'nothing'}"
+                    if rec.attempt > RECORDER_RETRIES:
+                        self.failure = why
+                        print(f"[{name}] giving up on video after {rec.attempt} tries: {why}")
+                        return
+                    print(f"[{name}] {why}; retrying in {RECORDER_RETRY_WAIT_S} s "
+                          f"(try {rec.attempt + 1} of {RECORDER_RETRIES + 1})")
+                    rec.stop()
+                    await asyncio.sleep(RECORDER_RETRY_WAIT_S)
+                    rec.start()
             if not in_window(self.ch.get("schedule", [])):
                 print(f"[{name}] schedule window closed")
                 return
 
 
-async def run_live(settings: dict, channels: list[dict], data_dir: Path) -> None:
+async def run_live(settings: dict, channels: list[dict], data_dir: Path) -> list[str]:
+    """Runs every enabled channel. Returns why recording failed, one line per failed channel."""
     queue = ClipQueue(data_dir / "queue.db")
     workers = [ChannelWorker(settings, c, queue, data_dir) for c in channels if c.get("enabled")]
     if not workers:
         print("No enabled channels in config/channels.yaml")
-        return
+        return []
     await asyncio.gather(*(w.run() for w in workers))
+    return [f"{w.ch['name']}: {w.failure}" for w in workers if w.failure]
 
 
 async def watch_chat(settings: dict, channel: dict) -> None:

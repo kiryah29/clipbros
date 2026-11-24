@@ -126,12 +126,15 @@ def main(argv: list[str] | None = None) -> None:
             if c.get("enabled") and c.get("platform") != "simulated":
                 reg.record(c["name"], c["platform"], c.get("game"), source="cli")
         live = run_live(settings, channels, data_dir)
+        failures = []
         try:
-            asyncio.run(asyncio.wait_for(live, a.minutes * 60) if a.minutes else live)
+            failures = asyncio.run(asyncio.wait_for(live, a.minutes * 60) if a.minutes else live)
         except KeyboardInterrupt:
             print("stopped")
         except TimeoutError:
             print("time limit reached, stopped")
+        if failures:   # non-zero exit, so the control page marks the run "failed"
+            sys.exit("recording failed: " + "; ".join(failures))
     elif a.cmd == "control-password":
         import getpass
         from .control import hash_password

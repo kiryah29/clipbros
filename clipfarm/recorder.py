@@ -11,6 +11,7 @@ import atexit
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -107,29 +108,49 @@ class LiveRecorder:
         self.keep_s = buffer_minutes * 60
         self.proc: subprocess.Popen | None = None
         self.sl: subprocess.Popen | None = None
+        self.attempt = 0                 # bumped on every (re)start
+        self.started_at = 0.0
+        self.last_error = ""             # last line streamlink wrote to stderr
+
+    def _relay_streamlink_log(self, pipe) -> None:
+        """Print streamlink's own messages into the run log (they used to be thrown away,
+        which hid why a stream could not be opened) and keep the last one."""
+        for raw in iter(pipe.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if line:
+                self.last_error = line
+                print(f"[{self.channel}] streamlink: {line}", flush=True)
+        pipe.close()
 
     def start(self) -> None:
         if not shutil.which("streamlink"):
             raise RuntimeError("streamlink is not installed (pip install streamlink)")
         _tie_children_to_us()
+        self.stop()   # on a restart, make sure the old pair is gone
+        self.attempt += 1
+        self.last_error = ""
         extra = {} if sys.platform == "win32" else {"preexec_fn": _child_setup}
         self.sl = subprocess.Popen(["streamlink", "--stdout", self.url, self.quality],
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **extra)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, **extra)
+        threading.Thread(target=self._relay_streamlink_log, args=(self.sl.stderr,),
+                         daemon=True).start()
         # segment list (csv: file,start,end relative to t0) works on every OS,
         # unlike strftime("%s") which Windows lacks
-        for f in self.dir.glob("seg_*.ts"):
+        for f in self.dir.glob("seg*.ts"):
             f.unlink(missing_ok=True)
         self.list_path = self.dir / "segments.csv"
         self.list_path.unlink(missing_ok=True)
-        self.t0 = time.time()
+        self.t0 = self.started_at = time.time()
+        # a new name per attempt, so code that remembers seen segments sees the new ones
         self.proc = subprocess.Popen(
             ["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-c", "copy", "-f", "segment",
              "-segment_time", str(SEG_SECONDS), "-reset_timestamps", "1",
              "-segment_list", str(self.list_path), "-segment_list_type", "csv",
-             str(self.dir / "seg_%06d.ts")],
+             str(self.dir / f"seg{self.attempt}_%06d.ts")],
             stdin=self.sl.stdout, **extra)
         self.sl.stdout.close()   # only ffmpeg reads it now; if ffmpeg dies streamlink sees EOF
-        atexit.register(self.stop)  # never leave streamlink/ffmpeg running after we exit
+        if self.attempt == 1:
+            atexit.register(self.stop)  # never leave streamlink/ffmpeg running after we exit
 
     def stop(self) -> None:
         """Stop streamlink and ffmpeg (and streamlink's child process on Windows)."""
