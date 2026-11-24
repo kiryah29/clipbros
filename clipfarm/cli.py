@@ -120,6 +120,11 @@ def main(argv: list[str] | None = None) -> None:
                           and c["platform"] == a.platform), {})
             channels = [{**found, "name": a.channel, "platform": a.platform, "enabled": True,
                          "schedule": [], **({"game": a.game} if a.game else {})}]
+        from .streamers import FILE as STREAMERS_FILE, StreamerRegistry
+        reg = StreamerRegistry(data_dir / STREAMERS_FILE)
+        for c in channels:
+            if c.get("enabled") and c.get("platform") != "simulated":
+                reg.record(c["name"], c["platform"], c.get("game"), source="cli")
         live = run_live(settings, channels, data_dir)
         try:
             asyncio.run(asyncio.wait_for(live, a.minutes * 60) if a.minutes else live)

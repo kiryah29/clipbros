@@ -275,6 +275,10 @@ and watch, download, approve or reject the reels at `/clips`. Nothing is posted.
   `data/control/<run id>/` (queue.db, clips, `run.log`), so your own queue is untouched.
 - Stop kills the run and its streamlink/ffmpeg; runs also die when the app stops.
 - Run folders are deleted `CONTROL_KEEP_DAYS` days after they end (default 3).
+- Every streamer you start a run for is saved in `data/streamers.json` (first/last seen,
+  number of runs, last game) and kept after their run folders are gone. They are listed
+  under "Saved streamers" and suggested in the channel box. `clipfarm run` saves the
+  channels it monitors there too.
 - Public without a password: `/`, terms, privacy, the TikTok verification files and `/callback`.
 
 `.env` settings:

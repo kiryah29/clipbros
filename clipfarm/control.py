@@ -27,6 +27,7 @@ from aiohttp import web
 
 from .config import ROOT, load_channels
 from .queue import ClipQueue
+from .streamers import FILE as STREAMERS_FILE, StreamerRegistry
 
 CHANNEL_RE = re.compile(r"^[A-Za-z0-9_]{3,25}$")   # Twitch login names; no '-', so never a flag
 RUN_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
@@ -114,11 +115,14 @@ def games() -> list[str]:
     return sorted(p.stem for p in (ROOT / "config" / "games").glob("*.yaml"))
 
 
-def known_channels() -> list[str]:
+def known_channels(registry: StreamerRegistry | None = None) -> list[str]:
+    """Twitch names from channels.yaml plus every Twitch streamer the app has saved."""
+    saved = registry.names("twitch") if registry else []
     try:
-        return sorted({c["name"] for c in load_channels() if c.get("platform") == "twitch"})
+        cfg = [c["name"] for c in load_channels() if c.get("platform") == "twitch"]
     except (OSError, KeyError, TypeError, AttributeError):
-        return []
+        cfg = []
+    return sorted(set(cfg) | set(saved))
 
 
 def default_cmd(run_dir: Path, channel: str, game: str, minutes: int) -> list[str]:
@@ -134,8 +138,11 @@ def stream_state(log: str) -> str:
 
 
 class RunManager:
-    def __init__(self, root: Path, keep_days: float = 3, cmd=default_cmd, max_running: int = MAX_RUNNING):
+    def __init__(self, root: Path, keep_days: float = 3, cmd=default_cmd, max_running: int = MAX_RUNNING,
+                 streamers: StreamerRegistry | None = None):
         self.root, self.keep_s, self.cmd, self.max_running = root, keep_days * 86400, cmd, max_running
+        # kept next to the run folders' parent (data/streamers.json), so it outlives cleanup
+        self.streamers = streamers or StreamerRegistry(root.parent / STREAMERS_FILE)
         root.mkdir(parents=True, exist_ok=True)
         self.runs: dict[str, dict] = {}
         self.procs: dict[str, asyncio.subprocess.Process] = {}
@@ -175,6 +182,7 @@ class RunManager:
              "created": time.time(), "started": None, "ended": None}
         self.runs[rid] = r
         self._save(r)
+        self.streamers.record(r["channel"], "twitch", game, source="control")
         self._pump()
         return r
 
@@ -357,9 +365,20 @@ class ControlPages:
                 f"<div class='row' style='margin-left:auto'><a class='btn ghost' href='/clips?run={r['id']}'>Clips</a>{stop}</div></div>")
         return "".join(out)
 
+    def streamers_html(self) -> str:
+        rows = self.runs.streamers.all()
+        if not rows:
+            return "<p class='mut'>Streamers are saved here when you start their first run.</p>"
+        day = lambda t: time.strftime("%d %b %Y", time.localtime(t))  # noqa: E731
+        return "".join(
+            f"<div class='card'><b>{e(s['name'])}</b> &middot; {e(s.get('platform', ''))} &middot; "
+            f"{e(s.get('game') or 'default')}<br><span class='mut'>first {day(s.get('first_seen', 0))} &middot; "
+            f"last {day(s.get('last_seen', 0))} &middot; {s.get('runs', 0)} run{'s' if s.get('runs') != 1 else ''}"
+            "</span></div>" for s in rows)
+
     async def control(self, request: web.Request) -> web.Response:
         self.runs.cleanup()
-        chans = "".join(f"<option value='{e(c)}'>" for c in known_channels())
+        chans = "".join(f"<option value='{e(c)}'>" for c in known_channels(self.runs.streamers))
         gopts = "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in games())
         body = f"""
 <div class='row'><h2 style='margin-right:auto'>Start a test run</h2>
@@ -373,6 +392,7 @@ class ControlPages:
  <p><button>Start run</button></p>
  <p class='mut'>Up to {MAX_RUNNING} runs at once; extra runs wait in line. Nothing is posted anywhere.</p></form>
 <h2>Runs</h2><div id='runs'>{self.runs_html()}</div>
+<h2>Saved streamers</h2>{self.streamers_html()}
 <script>setInterval(async()=>{{const r=await fetch('/control/runs');
  if(r.ok)document.getElementById('runs').innerHTML=await r.text();}},5000);</script>"""
         return self.page("Control", body)
