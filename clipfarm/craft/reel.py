@@ -71,7 +71,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
             gh = strip_top - fh
         bh = H - fh - gh
         fc = facecam
-        f.append("[0:v]split=2[src1][src2]")
+        f.append("[0:v]fps=30,split=2[src1][src2]")
         f.append(f"[src1]crop=iw*{fc['w']}:ih*{fc['h']}:iw*{fc['x']}:ih*{fc['y']},"
                  f"scale={W}:{fh}:force_original_aspect_ratio=increase,crop={W}:{fh},setsar=1[face]")
         f.append(f"[src2]{gblur}scale=-2:{gh},crop={W}:{gh},setsar=1[game]")
@@ -93,7 +93,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
             caption_y = min(caption_y, strip_top - 110)
     else:
         # gameplay_only: blurred fill behind a centered 16:9 frame
-        f.append(f"[0:v]{gblur}split=2[bg][fg]")
+        f.append(f"[0:v]fps=30,{gblur}split=2[bg][fg]")
         # blur a quarter-size copy and scale it back up: same look as boxblur=20:2 at full
         # size for ~1/16 of the pixels (the full-size blur was half the render time)
         qw, qh = _even(W / 4), _even(H / 4)
