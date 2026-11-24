@@ -211,6 +211,7 @@ left manual. Plug in an uploader when you're ready.
 
 ```
 config/settings.yaml     detector, clip, ranking, reel settings
+config/settings.local.yaml  this PC only (not in git), merged over settings.yaml, e.g. data_dir
 config/channels.yaml     channels, facecam boxes, schedules, per-channel overrides
 clipfarm/chat/           simulated, twitch (IRC/WebSocket), youtube (Data API), kick (stub)
 clipfarm/detector.py     chat-velocity spike detection

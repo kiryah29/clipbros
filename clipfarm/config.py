@@ -20,9 +20,17 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_settings(path: str | Path | None = None) -> dict[str, Any]:
+    """settings.yaml, with this PC's own overrides from settings.local.yaml next to it (not
+    in git), e.g. data_dir on another drive, so the Ryzen PC and the ARM laptop can run the
+    same code without local edits that block `git pull`."""
     path = Path(path or ROOT / "config" / "settings.yaml")
-    with open(path) as f:
-        return yaml.safe_load(f)
+    with open(path, encoding="utf-8") as f:
+        settings = yaml.safe_load(f)
+    local = path.with_name(path.stem + ".local.yaml")
+    if local.exists():
+        with open(local, encoding="utf-8") as f:
+            settings = _deep_merge(settings, yaml.safe_load(f) or {})
+    return settings
 
 
 def load_channels(path: str | Path | None = None) -> list[dict[str, Any]]:

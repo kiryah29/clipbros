@@ -50,3 +50,12 @@ def test_gameplay_crop_slides_off_a_left_facecam():
 def test_gameplay_crop_masks_a_facecam_it_cannot_avoid():
     centre = {"x": 0.4, "y": 0.4, "w": 0.2, "h": 0.2}
     assert gameplay_crop(centre, 1080, 752, 1.25)[1] == [0.4, 0.4, 0.2, 0.2]
+
+
+def test_local_settings_override_this_pc_only(tmp_path):
+    from clipfarm.config import load_settings
+    (tmp_path / "settings.yaml").write_text("data_dir: ./data\nclip: {pre_roll_s: 12, max_length_s: 30}\n")
+    assert load_settings(tmp_path / "settings.yaml")["data_dir"] == "./data"
+    (tmp_path / "settings.local.yaml").write_text("data_dir: D:/clipbros/data\nclip: {pre_roll_s: 10}\n")
+    s = load_settings(tmp_path / "settings.yaml")
+    assert s["data_dir"] == "D:/clipbros/data" and s["clip"] == {"pre_roll_s": 10, "max_length_s": 30}
