@@ -161,21 +161,27 @@ class LiveRecorder:
             if end < cutoff:
                 f.unlink(missing_ok=True)
 
-    def cut(self, start_ts: float, end_ts: float, out: Path) -> Path:
+    def cut(self, start_ts: float, end_ts: float, out: Path) -> float:
+        """Copy the buffered segments covering [start_ts, end_ts] into `out` without
+        re-encoding (the reel render re-encodes anyway). Segments start on a keyframe,
+        so the copy starts at the segment boundary at or before start_ts. Returns that
+        lead-in in seconds: the moment starts `lead` seconds into `out`, and craft_clip
+        trims it off frame-accurately while rendering."""
         picked = [(f, a) for f, a, b in self.segments() if b > start_ts and a < end_ts]
         if not picked:
             raise RuntimeError("no buffered video for that window (was the recorder running?)")
         first = picked[0][1]
+        lead = max(0.0, start_ts - first)
         picked = [f for f, _ in picked]
         listfile = out.with_suffix(".txt")
         listfile.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in picked))
         out.parent.mkdir(parents=True, exist_ok=True)
         _run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-              "-i", str(listfile), "-ss", f"{max(0, start_ts - first):.2f}",
-              "-t", f"{end_ts - start_ts:.2f}", "-c:v", "libx264", "-preset", "veryfast",
-              "-c:a", "aac", str(out)])
+              "-i", str(listfile), "-t", f"{lead + end_ts - start_ts:.3f}",
+              "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+              "-avoid_negative_ts", "make_zero", str(out)])
         listfile.unlink(missing_ok=True)
-        return out
+        return round(lead, 3)
 
 
 class DemoRecorder:
@@ -185,7 +191,7 @@ class DemoRecorder:
         self.fc = facecam
         self.size = size
 
-    def cut(self, start_ts: float, end_ts: float, out: Path) -> Path:
+    def cut(self, start_ts: float, end_ts: float, out: Path) -> float:
         out.parent.mkdir(parents=True, exist_ok=True)
         dur = end_ts - start_ts
         fc = self.fc
@@ -196,4 +202,4 @@ class DemoRecorder:
               "-f", "lavfi", "-i", f"sine=frequency=330:duration={dur:.2f}",
               "-vf", box, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
               "-c:a", "aac", "-shortest", str(out)])
-        return out
+        return 0.0   # generated exactly at the window, no lead-in
