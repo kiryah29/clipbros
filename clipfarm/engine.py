@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import threading
 import time
 from pathlib import Path
 
@@ -180,6 +181,18 @@ def _paths(data_dir: Path, channel: str, clip_id: int) -> tuple[Path, Path, Path
 
 _found_facecams: dict[str, dict] = {}   # channel -> last facecam box auto-detected this run
 
+# One clip is crafted at a time, across all channels: overlapping clips queue here instead
+# of running several x264 encoders + NudeNet at once (2.3 GB peak on a 2 vCPU / 4 GB VPS
+# with clips 60 s apart; one at a time stays around 1.2-1.5 GB).
+# Live runs also queue in the event loop (not in a worker thread blocked on the lock), so a
+# backlog of clips can't use up asyncio.to_thread's pool that audio decoding needs too.
+_craft_lock = threading.Lock()
+_craft_turns: dict[int, asyncio.Lock] = {}   # one per event loop (one live run = one loop)
+
+
+def _craft_queue() -> asyncio.Lock:
+    return _craft_turns.setdefault(id(asyncio.get_running_loop()), asyncio.Lock())
+
 
 def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | None,
                  detect=detect_facecam) -> tuple[dict | None, str]:
@@ -202,7 +215,17 @@ def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | Non
 
 def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                words=None, nudity_check=check_nudity) -> None:
+    """words, if given, are timed from the clip window start (like the live transcript)."""
+    with _craft_lock:
+        _craft_clip(queue, clip_id, cfg, facecam, words, nudity_check)
+
+
+def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
+                words, nudity_check) -> None:
     clip = queue.get(clip_id)
+    # stream-copied cuts start on the keyframe before the window: anything measured on
+    # the raw file is re-timed by `lead`, and the render trims it off
+    lead = float(clip.receipt.get("raw_lead_s") or 0)
     raw = Path(clip.raw_path)
     reel = raw.with_name(raw.name.replace("_raw", "_reel"))
     try:
@@ -215,15 +238,19 @@ def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                 cfg["reel"].get("transcriber", "auto") == "auto":
             words = [Word(*w) for w in clip.receipt["transcript"]]   # live stream transcript
         if words is None:
-            words = transcribe(raw, cfg["reel"].get("transcriber", "none"))
+            words = [Word(w.text, w.start - lead, w.end - lead)
+                     for w in transcribe(raw, cfg["reel"].get("transcriber", "none"))
+                     if w.start >= lead]
         if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
-            words = drop_dialogue(words, subtitle_times(raw, box))
-        safety = nudity_check(raw, cfg.get("nudity"))
+            words = drop_dialogue(words, [t - lead for t in subtitle_times(raw, box)])
+        # scan only the clip window, so the ranges line up with the reel
+        safety = nudity_check(raw, cfg.get("nudity"), start=lead) if lead else \
+            nudity_check(raw, cfg.get("nudity"))
         receipt = {**queue.get(clip_id).receipt, "nudity": safety}
         if safety["decision"] != "clean":
             print(f"  nudity check clip {clip_id}: {safety['decision']} ({safety['why']})")
         render_reel(raw, reel, cfg["reel"], facecam, words, hook_text=clip.receipt.get("hook"),
-                    chat=clip.receipt.get("chat"), censor=safety.get("ranges"))
+                    chat=clip.receipt.get("chat"), censor=safety.get("ranges"), lead=lead)
         status = "held" if safety["decision"] == "review" else "crafted"
         queue.update(clip_id, reel_path=str(reel), status=status, receipt=receipt)
     except Exception as e:
@@ -317,8 +344,9 @@ def run_demo(settings: dict, channel: dict, minutes: float, render: bool,
         print(f"  clip {cid}: +{off:6.1f}s  score={score:5.1f}  [{'+'.join(m['triggers'])}] "
               f"{ca.get('clip_type', '')} conf={ca.get('confidence_score', '-')}  {receipt['why']}")
         if render:
-            rec.cut(m["start"], m["end"], raw)
-            queue.update(cid, raw_path=str(raw))
+            lead = rec.cut(m["start"], m["end"], raw)
+            queue.update(cid, raw_path=str(raw),
+                         receipt={**queue.get(cid).receipt, "raw_lead_s": lead})
             words = fake_words(DEMO_LINES[i % len(DEMO_LINES)], start=0.6)
             craft_clip(queue, cid, cfg, channel.get("facecam"), words=words)
     return queue
@@ -380,9 +408,12 @@ class ChannelWorker:
         save_receipt(rpath, receipt)
         print(f"[{name}] clip {cid} (score {score}) {receipt['why']}")
         try:
-            await asyncio.to_thread(self.recorder.cut, m["start"], m["end"], raw)
-            self.queue.update(cid, raw_path=str(raw))
-            await asyncio.to_thread(craft_clip, self.queue, cid, self.cfg, self.ch.get("facecam"))
+            lead = await asyncio.to_thread(self.recorder.cut, m["start"], m["end"], raw)
+            self.queue.update(cid, raw_path=str(raw),
+                              receipt={**self.queue.get(cid).receipt, "raw_lead_s": lead})
+            async with _craft_queue():   # one clip crafted at a time, across channels
+                await asyncio.to_thread(craft_clip, self.queue, cid, self.cfg,
+                                        self.ch.get("facecam"))
         except Exception as e:
             self.queue.update(cid, status="failed")
             print(f"[{name}] clip {cid} failed: {e}")

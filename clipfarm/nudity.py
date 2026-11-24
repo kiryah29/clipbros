@@ -209,12 +209,14 @@ def _probe(path: Path) -> tuple[int, int, float]:
     return int(st["width"]), int(st["height"]), float(info["format"].get("duration") or 0)
 
 
-def frames(path: Path, fps: float, width: int):
-    """(time, BGR frame) pairs, `fps` a second, from one ffmpeg pass."""
+def frames(path: Path, fps: float, width: int, start: float = 0.0):
+    """(time, BGR frame) pairs, `fps` a second, from one ffmpeg pass; times count from
+    `start` seconds into the file."""
     W, H, dur = _probe(path)
     w = min(width, W) // 2 * 2
     h = max(2, int(H * w / W) // 2 * 2)
-    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", str(path), "-vf",
+    seek = ["-ss", f"{start:.3f}"] if start else []
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", *seek, "-i", str(path), "-vf",
                              f"fps={fps},scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "bgr24",
                              "pipe:1"], stdout=subprocess.PIPE)
     n, size = 0, w * h * 3
@@ -227,8 +229,10 @@ def frames(path: Path, fps: float, width: int):
         proc.wait()
 
 
-def check_clip(path: Path, cfg: dict | None, detector: Detector | None = None) -> dict:
-    """Scan the clip and decide: clean, blur these ranges, or hold for review."""
+def check_clip(path: Path, cfg: dict | None, detector: Detector | None = None,
+               start: float = 0.0) -> dict:
+    """Scan the clip and decide: clean, blur these ranges, or hold for review.
+    start: skip this many seconds of lead-in (ranges are then timed from there)."""
     c = settings(cfg)
     if not c["enabled"]:
         return {"decision": "skipped", "ranges": [], "why": "nudity check disabled"}
@@ -236,9 +240,10 @@ def check_clip(path: Path, cfg: dict | None, detector: Detector | None = None) -
     if det is None:
         return unavailable(c, _model_err or "no model")
     try:
-        dur = _probe(Path(path))[2]
+        dur = max(0.0, _probe(Path(path))[2] - start)
         scores = [(t, *frame_score(det, img, c))
-                  for t, img in frames(Path(path), float(c["sample_fps"]), int(c["scan_width"]))]
+                  for t, img in frames(Path(path), float(c["sample_fps"]), int(c["scan_width"]),
+                                       start)]
     except (OSError, subprocess.CalledProcessError, ValueError, KeyError, IndexError) as e:
         return unavailable(c, f"{type(e).__name__}: {e}")
     if not scores:

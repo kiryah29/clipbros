@@ -37,13 +37,18 @@ def _ff_path(p: Path) -> str:
 
 def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
                 words: list[Word], hook_text: str | None = None,
-                chat: list | None = None, censor: list | None = None) -> Path:
+                chat: list | None = None, censor: list | None = None,
+                lead: float = 0.0) -> Path:
     """censor: [start, end] seconds where the gameplay is blurred (nudity check); the
-    facecam, hook card and captions stay sharp."""
+    facecam, hook card and captions stay sharp.
+    lead: seconds at the start of `raw` before the clip window (stream-copied cuts start
+    on the keyframe before the moment). They are trimmed frame-accurately here, so all
+    times passed in (words, chat, censor) are relative to the clip window, not to raw."""
     W, H = cfg["width"], cfg["height"]
     blur = blur_filter(censor or [])
     gblur = blur + "," if blur else ""
-    dur = probe_duration(raw)
+    lead = max(0.0, float(lead or 0))
+    dur = probe_duration(raw) - lead
     backdrop = cfg.get("backdrop")
     music = cfg.get("music")
     strip = bool(chat) and cfg.get("chat_strip", False) and \
@@ -51,7 +56,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
     has_back = bool(backdrop) and Path(backdrop).exists() and not strip
     has_music = bool(music) and Path(music).exists()
 
-    inputs = ["-i", str(raw)]
+    inputs = (["-ss", f"{lead:.3f}"] if lead else []) + ["-i", str(raw)]
     if has_back:
         inputs += ["-stream_loop", "-1", "-i", str(backdrop)]
     if has_music:
@@ -66,7 +71,7 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
             gh = strip_top - fh
         bh = H - fh - gh
         fc = facecam
-        f.append("[0:v]split=2[src1][src2]")
+        f.append("[0:v]fps=30,split=2[src1][src2]")
         f.append(f"[src1]crop=iw*{fc['w']}:ih*{fc['h']}:iw*{fc['x']}:ih*{fc['y']},"
                  f"scale={W}:{fh}:force_original_aspect_ratio=increase,crop={W}:{fh},setsar=1[face]")
         f.append(f"[src2]{gblur}scale=-2:{gh},crop={W}:{gh},setsar=1[game]")
@@ -88,8 +93,12 @@ def render_reel(raw: Path, out: Path, cfg: dict, facecam: dict | None,
             caption_y = min(caption_y, strip_top - 110)
     else:
         # gameplay_only: blurred fill behind a centered 16:9 frame
-        f.append(f"[0:v]{gblur}split=2[bg][fg]")
-        f.append(f"[bg]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=20:2[bgb]")
+        f.append(f"[0:v]fps=30,{gblur}split=2[bg][fg]")
+        # blur a quarter-size copy and scale it back up: same look as boxblur=20:2 at full
+        # size for ~1/16 of the pixels (the full-size blur was half the render time)
+        qw, qh = _even(W / 4), _even(H / 4)
+        f.append(f"[bg]scale={qw}:{qh}:force_original_aspect_ratio=increase,crop={qw}:{qh},"
+                 f"boxblur=5:2,scale={W}:{H}:flags=bilinear[bgb]")
         f.append(f"[fg]scale={W}:-2[fgs]")
         f.append("[bgb][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[stacked]")
         seam_y = None
