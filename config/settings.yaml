@@ -201,6 +201,25 @@ reel:
   wait_hook_audio_ratio: null   # null = the channel's audio.min_ratio
   wait_hook_chat_ratio: 5.0
   hooks:
+    # templates = today's hook templates (clipfarm/hooks.py) | rules = the rule-based writer
+    # (clipfarm/hookwriter.py): facts about the clip filled into a few proven hook patterns,
+    # scored, templates as fallback. Compare both in the hook lab (clipbros.app/hooklab)
+    # before switching: nothing changes on posted clips until this says rules.
+    writer: templates
+    candidates: 3           # candidates kept in the receipt and shown in the hook lab
+    min_score: 1.0          # below this the rule writer falls back to templates
+    style_weights: {story: 1.2, story_outcome: 1.3, warning: 1.2, prediction: 1.1, stakes: 1.0,
+                    payoff: 1.0, viewer_title: 1.0, game: 0.9, chat_voice: 0.8, quote: 0.6}
+    drop_kinds: [chat]      # template kinds never used: no "Chat went 6x faster"
+    demote_kinds: [phrase, quote]   # rules writer's fallback uses these last
+    plan_phrases: ["i'm gonna", "im gonna", "i'm going to", "let's", "lets", "watch me",
+                   "bet i can", "i'm about to", "imma", "i'll"]
+    setup_phrases: ["watch this", "watch me", "trust me", "i got this", "too easy", "light work",
+                    "this is gonna work", "i can't lose"]
+    max_action_words: 6     # "I'm gonna <up to 6 words>"
+    chat_min_support: 2     # a chat line needs this many other chatters saying the same thing
+    payoff_min_s: 3.0       # "Wait for the ..." only when the peak is this far in
+    min_confidence: 0.8     # sound / HUD facts below this are ignored (no fact beats a wrong one)
     max_chars: 42           # longer lines get skipped (card fits 3 lines on 9:16)
     max_quote_words: 6
     quote_within_s: 10      # a quoted phrase or sentence must be said in the reel's first N s

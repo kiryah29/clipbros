@@ -5,6 +5,7 @@ channels:
     enabled: true
     game: gta6                # game profile from config/games/ (moment hints, hooks, clip windows)
     streamer: "Demo"          # display name used in hook templates
+    pronoun: he               # hooks rewrite "my car" to "his car" (he | she | they)
     sim:                      # demo only: GTA-flavoured hype chat so moment hints fire
       hype_lines: ["COPS 💀", "5 STAR LMAO", "bro is getting chased", "WANTED LEVEL",
                    "the police 😭", "RUN"]
@@ -52,6 +53,7 @@ channels:
     platform: twitch
     enabled: false
     streamer: "Lydia"
+    pronoun: she
     facecam: {x: 0.15, y: 0.0, w: 0.6, h: 1.0}       # the room left of her chat overlay; the crop centres on it
     reel: {layout: full_cam}
     schedule: []

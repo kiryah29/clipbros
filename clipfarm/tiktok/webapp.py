@@ -19,6 +19,7 @@ from aiohttp import web
 
 from .. import brand
 from ..control import COOKIE, ControlPages, RunManager, Sessions, auth_middleware
+from ..hooklab import HookLabPages
 from ..instagram import api as ig_api
 from ..instagram.webapp import MEDIA_RE, InstagramPages
 from ..queue import ClipQueue
@@ -41,6 +42,7 @@ def page(title: str, body: str, status: int = 200) -> web.Response:
            f"{brand.FONTS_LINK}<style>{CSS}</style></head><body>"
            f"<header>{brand.logo_html().replace('{home}', '/')}<span class='label'>Clip bros app</span></header>{body}"
            f"<p class='mut'><a href='/control'>Control</a> &middot; <a href='/clips'>Clips</a> &middot; "
+           f"<a href='/hooklab'>Hook lab</a> &middot; "
            f"<a href='{LEGAL}terms.html'>Terms</a> &middot; "
            f"<a href='{LEGAL}privacy.html'>Privacy</a></p></body></html>")
     return web.Response(text=doc, content_type="text/html", status=status)
@@ -368,7 +370,7 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
         web.get("/", home), web.get(redirect_path, app_state.callback),
         web.get(r"/{name:(?:index|terms|privacy)\.html}", app_state.static_doc),
         web.get(r"/{name:tiktok[A-Za-z0-9]+\.txt}", app_state.static_doc),
-        *pages.routes(),
+        *pages.routes(), *HookLabPages(runs, page).routes(),
     ])
     if allow_posting:   # owner-only switch (CONTROL_ALLOW_POSTING=1 in .env)
         app.add_routes([

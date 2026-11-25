@@ -60,4 +60,5 @@ def channel_settings(settings: dict, channel: dict) -> dict:
     out.setdefault("moments", [])
     out.setdefault("game_name", channel.get("game") or "")
     out["streamer"] = channel.get("streamer") or channel["name"].lstrip("@")
+    out["pronoun"] = channel.get("pronoun") or out.get("pronoun") or "he"   # hooks: "his car"
     return out

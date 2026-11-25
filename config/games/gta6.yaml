@@ -14,6 +14,33 @@
 # Chat reacts AFTER the payoff, so escalation moments need a long pre-roll.
 
 game_name: "GTA 6"
+aliases: ["Grand Theft Auto VI", "GTA VI"]
+
+# Hook writer (clipfarm/hookwriter.py, template: config/games/_template.yaml)
+nouns: [cops, cop, police, car, bank, heist, tank, helicopter, plane, boat, gun, Lucia, Jason,
+        Vice City, Leonida, mansion, store, gas station, prison, Tesla, scooter, wanted]
+sound_words:                 # sound event -> hook word ("Wait for the cops")
+  siren: cops
+  police car (siren): cops
+  explosion: explosion
+  gunshot, gunfire: shootout
+  car crash: crash
+# Matching not built yet; add screenshots under hud/gta6/ cut from recorded streams.
+hud_events: []
+#  - {name: wasted, image: hud/gta6/wasted.png, region: {x: 0.25, y: 0.35, w: 0.5, h: 0.3},
+#     outcome: fail, word: ending}
+#  - {name: busted, image: hud/gta6/busted.png, region: {x: 0.25, y: 0.35, w: 0.5, h: 0.3},
+#     outcome: fail, word: ending}
+#  - {name: mission_failed, image: hud/gta6/mission_failed.png,
+#     region: {x: 0.2, y: 0.3, w: 0.6, h: 0.25}, outcome: fail}
+hud_counters: []
+#  - {name: wanted_stars, image: hud/gta6/star.png, region: {x: 0.75, y: 0.02, w: 0.23, h: 0.08},
+#     stakes: "{n} stars"}
+hooks:
+  style_weights: {warning: 1.3, story: 1.25}   # the reference clips: warnings and one-line stories
+  extra_patterns:
+    game:   # (moment hook_templates below count as game patterns too)
+      - {text: "{streamer} vs the cops in {game}", when: {thing: cops}}   # sirens heard
 
 clip:
   pre_roll_s: 12            # look-back; the reel is anchored on the audio peak (settings.yaml)

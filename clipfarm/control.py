@@ -112,7 +112,8 @@ def auth_middleware(sessions: Sessions, is_public: Callable[[str], bool]):
 
 # --------------------------------------------------------------------------- runs
 def games() -> list[str]:
-    return sorted(p.stem for p in (ROOT / "config" / "games").glob("*.yaml"))
+    return sorted(p.stem for p in (ROOT / "config" / "games").glob("*.yaml")
+                  if not p.stem.startswith("_"))     # _template.yaml is not a game
 
 
 def known_channels(registry: StreamerRegistry | None = None) -> list[str]:
