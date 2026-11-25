@@ -304,6 +304,28 @@ from test runs" (newest run first, rejected and posted ones left out), and `/cli
 default caption. After a post the clip's status is `posted`. Posting is behind the shared
 control password: anyone who has it can post to the connected account.
 
+## Post to Instagram (Instagram API with Instagram Login)
+
+Same app, same review flow: `/clips` shows **Post to Instagram** next to Post to TikTok
+(when `CONTROL_ALLOW_POSTING=1`). Reels go out **public right away**: for your own
+professional account Meta's Standard Access is enough, no app review.
+
+1. Make the Instagram account a **creator or business** account (Instagram app, Settings,
+   Account type and tools).
+2. In developers.facebook.com create an app, add the **Instagram** product and open
+   **API setup with Instagram login**. Add your Instagram account under Roles (Instagram
+   testers) and accept the invite in Instagram (Settings, Website permissions, Tester invites).
+3. Under Business login settings add the OAuth redirect URI
+   `https://clipbros.app/callback/instagram`.
+4. Put `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` (the Instagram ones from that page) and
+   `INSTAGRAM_REDIRECT_URI` in `.env`, restart the app, open `/instagram` and connect.
+
+Meta downloads the video itself, so while a reel is posted the app serves it at a random,
+public link (`/ig/media/<token>.mp4`) that expires after 2 hours or as soon as the reel is
+published. The status page publishes the reel once Instagram has processed it and saves the
+link in the clip's receipt (`posted_to.instagram`). The token (60 days, refreshed when a
+week is left) is in `data/instagram_token.json` (gitignored).
+
 ## Control page (test runs from another computer)
 
 The `tiktok-app` web app also has a password-protected control page at `/control`.

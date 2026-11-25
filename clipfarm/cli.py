@@ -230,7 +230,9 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"TikTok app not configured: {ex} (see README, 'Post to TikTok')")
         from .recorder import _tie_children_to_us
         _tie_children_to_us()   # control-page runs die with the app
+        from .instagram.api import Config as IGConfig
         web.run_app(build_app(cfg, data_dir / "queue.db", data_dir / "tiktok_token.json",
+                              ig_cfg=IGConfig.from_env(),
                               password_hash=os.getenv("CONTROL_PASSWORD_HASH") or None,
                               allow_posting=os.getenv("CONTROL_ALLOW_POSTING") == "1",
                               keep_days=float(os.getenv("CONTROL_KEEP_DAYS") or 3)),

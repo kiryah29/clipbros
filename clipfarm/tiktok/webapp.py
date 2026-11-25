@@ -19,6 +19,8 @@ from aiohttp import web
 
 from .. import brand
 from ..control import COOKIE, ControlPages, RunManager, Sessions, auth_middleware
+from ..instagram import api as ig_api
+from ..instagram.webapp import MEDIA_RE, InstagramPages
 from ..queue import ClipQueue
 from .api import Config, TikTokClient, TikTokError, Token, TokenStore, authorize_url
 
@@ -325,7 +327,8 @@ async function poll(){{const r=await fetch('/status/{e(pid)}');const j=await r.j
 
 
 def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str | None = None,
-              allow_posting: bool = False, control_dir: Path | None = None, keep_days: float = 3) -> web.Application:
+              allow_posting: bool = False, control_dir: Path | None = None, keep_days: float = 3,
+              ig_cfg: "ig_api.Config | None" = None) -> web.Application:
     """Public: home, terms, privacy, TikTok files, the OAuth callback, sign-in. Everything else needs
     the shared password. The TikTok posting pages exist only when the owner sets allow_posting."""
     app_state = App(cfg, ClipQueue(db_path), TokenStore(token_path))
@@ -334,9 +337,17 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
     app_state.runs = runs
     pages = ControlPages(runs, sessions, password_hash, page, posting=allow_posting)
     redirect_path = urlparse(cfg.redirect_uri).path or "/callback"
+    insta = InstagramPages(ig_cfg, ig_api.TokenStore(token_path.with_name("instagram_token.json")),
+                           runs, page, lambda: app_state.http) if allow_posting else None
     public = re.compile(r"^/(|index\.html|terms\.html|privacy\.html|tiktok[A-Za-z0-9]+\.txt|signin)$")
-    app = web.Application(middlewares=[auth_middleware(sessions, lambda path: bool(public.match(path))
-                                                       or path == redirect_path)])
+    media = re.compile(MEDIA_RE)
+
+    def is_public(path: str) -> bool:
+        if public.match(path) or path == redirect_path:
+            return True     # Meta's servers fetch the reel and Instagram calls back, both signed out
+        return bool(insta and (path == insta.redirect_path or media.match(path)))
+
+    app = web.Application(middlewares=[auth_middleware(sessions, is_public)])
 
     async def home(request: web.Request) -> web.StreamResponse:
         if sessions.valid(request.cookies.get(COOKIE)):
@@ -367,5 +378,6 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
             web.post(r"/clip/{id:\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
             web.get(r"/runs/{rid}/clip/{cid:\d+}/tiktok", app_state.review),
             web.post(r"/runs/{rid}/clip/{cid:\d+}/tiktok/post", app_state.post),
+            *insta.routes(),
         ])
     return app
