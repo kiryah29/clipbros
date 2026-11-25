@@ -34,8 +34,10 @@ RECORDER_RETRY_WAIT_S = 15
 
 
 def _fit(start: float, end: float, c: dict) -> tuple[float, float]:
-    if end - start > c["max_length_s"]:
-        start = end - c["max_length_s"]
+    # the raw cut may be longer than the reel: the reel is re-anchored on the audio peak
+    longest = c.get("raw_max_s", c["max_length_s"])
+    if end - start > longest:
+        start = end - longest
     if end - start < c.get("min_length_s", 0):
         start = end - c["min_length_s"]
     return start, end
@@ -261,7 +263,8 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
         # re-time the clip around the loudest 250 ms (chat reacts seconds after the moment)
         shift, length, anchor = 0.0, None, None
         if (cfg["clip"].get("anchor") or {}).get("enabled", True):
-            a = anchor_on_peak(window_levels(decode_pcm(raw)), 0.25, lead, cfg["clip"])
+            a = anchor_on_peak(window_levels(decode_pcm(raw)), 0.25, lead, cfg["clip"],
+                               [(w.start + lead, w.end + lead) for w in words or []])
             if a:
                 shift, length = a[0] - lead, a[1] - a[0]
                 anchor = {"shift_s": round(shift, 2), "length_s": round(length, 2),

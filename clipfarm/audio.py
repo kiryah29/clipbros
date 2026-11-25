@@ -57,13 +57,18 @@ def window_levels(pcm: bytes, sample_rate: int = SAMPLE_RATE, window_s: float = 
             for w in range(0, len(s), win) if s[w:w + win]]
 
 
-def anchor_on_peak(levels: list[float], window_s: float, lo: float, c: dict
+def anchor_on_peak(levels: list[float], window_s: float, lo: float, c: dict,
+                   words: list[tuple[float, float]] | None = None
                    ) -> tuple[float, float, float] | None:
     """(start, end, peak) in seconds for a clip anchored on the loudest window at or after
     `lo`: start `anchor.pre_s` before the peak, end `anchor.post_s` after the reaction fades
     (the last window still above median + fade_ratio x (peak - median) with no quiet gap
-    longer than fade_gap_s), then fitted to min/max_length_s without moving the start."""
-    a = {"pre_s": 4, "post_s": 7, "fade_ratio": 0.5, "fade_gap_s": 2.0, **(c.get("anchor") or {})}
+    longer than fade_gap_s), then fitted to min/max_length_s. If the file ends too soon for
+    min_length_s, the start moves back instead. `words` ((start, end) in file seconds): while
+    talking runs on past the end (next word within story_gap_s), the end follows it up to
+    story_max_s, so a story isn't cut mid-sentence."""
+    a = {"pre_s": 6, "post_s": 10, "fade_ratio": 0.5, "fade_gap_s": 2.0, "story_gap_s": 0.8,
+         "story_max_s": 40, **(c.get("anchor") or {})}
     first = int(lo / window_s)
     if len(levels) - first < 2:
         return None
@@ -78,10 +83,19 @@ def anchor_on_peak(levels: list[float], window_s: float, lo: float, c: dict
             break
     total = len(levels) * window_s
     peak = peak_i * window_s
-    start = max(0.0, peak - float(a["pre_s"]))
+    min_len = float(c.get("min_length_s", 20))
+    start = max(lo, peak - float(a["pre_s"]))
     end = min(total, (fade_i + 1) * window_s + float(a["post_s"]))
-    end = min(max(end, start + float(c.get("min_length_s", 15))),
-              start + float(c.get("max_length_s", 30)), total)
+    end = min(max(end, start + min_len), start + float(c.get("max_length_s", 30)), total)
+    start = max(lo, min(start, end - min_len))     # file ends early: take more setup instead
+    cap, talked = min(total, start + float(a["story_max_s"])), False
+    for ws, we in sorted(words or []):
+        if ws > end + float(a["story_gap_s"]):
+            break
+        if we > end and end < cap:
+            end, talked = min(we, cap), True
+    if talked:
+        end = min(end + 0.5, cap)                  # let the last word ring out
     return round(start, 2), round(end, 2), round(peak, 2)
 
 
