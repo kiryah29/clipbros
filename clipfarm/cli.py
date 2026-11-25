@@ -72,6 +72,8 @@ def main(argv: list[str] | None = None) -> None:
     ss.add_argument("--model-dir", default=None)
     ss.add_argument("--model", choices=["base.en", "tiny.en"], default="base.en",
                     help="base.en is more accurate; tiny.en is faster on slow PCs")
+    ss.add_argument("--clip", action="store_true",
+                    help="also download the caption model (Parakeet, ~460 MB)")
 
     sn = sub.add_parser("setup-nudity", help="download the nudity-check model and test it")
     sn.add_argument("clip", nargs="?", help="optional: scan this video and print the result")
@@ -167,6 +169,17 @@ def main(argv: list[str] | None = None) -> None:
         from .audio import SAMPLE_RATE
         t.transcribe_pcm(b"\x00\x00" * SAMPLE_RATE)   # loads + runs the model once
         print(f"Speech-to-text ready: {t.name}")
+        if a.clip:
+            from .speech import CLIP_MODEL, make_clip_transcriber
+            path = download_sherpa_model(Path(a.model_dir) if a.model_dir else None, CLIP_MODEL)
+            print(f"caption model: {path}")
+            if a.model_dir:
+                print(f"Set speech.clip_model_dir: {path} in config/settings.yaml")
+            c = make_clip_transcriber({**settings["speech"], "clip_model_dir": str(path)})
+            if c is None:
+                sys.exit("Caption model unavailable: pip install sherpa-onnx")
+            c.transcribe_pcm(b"\x00\x00" * SAMPLE_RATE)
+            print("Caption transcription ready: parakeet (reel.transcriber: clip)")
     elif a.cmd == "setup-nudity":
         from . import nudity
         cfg = nudity.settings(settings.get("nudity"))

@@ -19,7 +19,8 @@ class Word:
 
 def transcribe(media: Path, engine: str) -> list[Word]:
     """Word timestamps from the clip audio. 'none' returns no captions; 'auto' uses
-    faster-whisper when it is installed (live runs pass the stream transcript instead)."""
+    faster-whisper when it is installed (live runs pass the stream transcript instead);
+    'clip' uses Parakeet (speech.Parakeet), see engine.clip_words."""
     if engine == "auto":
         try:
             import faster_whisper  # noqa: F401
@@ -32,6 +33,27 @@ def transcribe(media: Path, engine: str) -> list[Word]:
         segments, _ = model.transcribe(str(media), word_timestamps=True, vad_filter=True)
         return [Word(w.word.strip(), w.start, w.end) for s in segments for w in s.words]
     return []
+
+
+def drop_sound_tags(words: list[Word]) -> list[Word]:
+    """No "*SCREAMS*", "[MUSIC]", "(laughs)" or "♪" lyric marks on screen: speech models
+    write these for sounds, and the reviewed reels showed them as captions."""
+    out, inside = [], None
+    for w in words:
+        t = w.text.strip()
+        if inside:                                  # a tag spread over several words
+            if t.rstrip(".,!?").endswith(inside):
+                inside = None
+            continue
+        if "♪" in t:
+            continue
+        opener = next((c for o, c in (("*", "*"), ("[", "]"), ("(", ")")) if t.startswith(o)), None)
+        if opener:
+            if not (len(t) > 1 and t.rstrip(".,!?").endswith(opener)):
+                inside = opener
+            continue
+        out.append(w)
+    return out
 
 
 def fake_words(text: str, start: float, word_s: float = 0.32) -> list[Word]:
