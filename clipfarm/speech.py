@@ -13,6 +13,12 @@ Speech-to-text engines (settings `speech.engine`):
                   model: python -m clipfarm setup-speech
   auto            faster_whisper, else sherpa_onnx, else off
   none            off (speech scores 0)
+
+Captions and hooks use a second, better pass: once a clip is cut, its 20-50 s of audio
+is transcribed again with Parakeet TDT 0.6B (sherpa-onnx, real word timings, runs on
+x64 and Windows ARM64). The small live model above stays for scoring only; on its own
+it missed about a quarter of the words, invented lines and looped ("OH YEAH OH YEAH").
+  model: python -m clipfarm setup-speech --clip
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ from .craft.captions import Word
 from .signals import BaselineTrigger, strength
 
 SHERPA_MODEL = "sherpa-onnx-whisper-base.en"   # tiny.en is faster but loops/mishears more
+CLIP_MODEL = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"   # captions: one pass per clip
 SHERPA_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{}.tar.bz2"
 TOKEN_RE = re.compile(r"[a-z0-9']+")
 
@@ -76,6 +83,70 @@ class SherpaOnnx:
         s.accept_waveform(sample_rate, [x / 32768 for x in samples(pcm)])
         self.rec.decode_stream(s)
         return voiced_words(s.result.text, pcm, sample_rate)
+
+
+class Parakeet:
+    """NVIDIA Parakeet TDT (English) through sherpa-onnx, for a whole clip at once.
+    Unlike the live Whisper model it times every word, so captions land on the word."""
+    name = "parakeet"
+    window_s = 20.0     # the model is trained on short utterances; longer audio is cut up
+
+    def __init__(self, cfg: dict):
+        import sherpa_onnx
+        d = Path(cfg.get("clip_model_dir") or ROOT / "models" / CLIP_MODEL)
+        if not d.is_absolute():
+            d = ROOT / d
+        enc, dec, join = _pick(d, "encoder"), _pick(d, "decoder"), _pick(d, "joiner")
+        tokens = next(d.glob("*tokens.txt"), None)
+        if not (enc and dec and join and tokens):
+            raise RuntimeError(f"no Parakeet model in {d} "
+                               "(run: python -m clipfarm setup-speech --clip)")
+        self.rec = sherpa_onnx.OfflineRecognizer.from_transducer(
+            encoder=str(enc), decoder=str(dec), joiner=str(join), tokens=str(tokens),
+            model_type="nemo_transducer", num_threads=int(cfg.get("threads", 2)))
+
+    def transcribe_pcm(self, pcm: bytes, sample_rate: int = SAMPLE_RATE) -> list[Word]:
+        x = [v / 32768 for v in samples(pcm)]
+        step = int(self.window_s * sample_rate)
+        words: list[Word] = []
+        for off in range(0, len(x), step):
+            s = self.rec.create_stream()
+            s.accept_waveform(sample_rate, x[off:off + step])
+            self.rec.decode_stream(s)
+            words += token_words(s.result.tokens, s.result.timestamps, off / sample_rate)
+        return words
+
+    def transcribe_file(self, media: Path) -> list[Word]:
+        from .audio import decode_pcm
+        return self.transcribe_pcm(decode_pcm(media))
+
+
+def token_words(tokens, times, offset: float = 0.0, token_s: float = 0.08) -> list[Word]:
+    """Sub-word tokens with start times -> words. A token starting with a space (or the
+    sentencepiece mark) opens a new word; a word ends where the next one starts, at most
+    0.6 s after its last token."""
+    out: list[list] = []
+    for tok, t in zip(tokens, times):
+        t = float(t) + offset
+        if tok.startswith((" ", "\u2581")) or not out:
+            out.append([tok.lstrip(" \u2581"), t, t + token_s])
+        else:
+            out[-1][0] += tok
+            out[-1][2] = t + token_s
+    words = [Word(w, s, e) for w, s, e in out if w]
+    for a, b in zip(words, words[1:]):
+        a.end = max(a.end, min(b.start, a.end + 0.6))
+    return words
+
+
+def make_clip_transcriber(cfg: dict, quiet: bool = False):
+    """The per-clip caption engine, or None if its model is missing."""
+    try:
+        return Parakeet(cfg)
+    except Exception as e:
+        if not quiet:
+            print(f"  ! clip transcription is off, captions use the live transcript ({e})")
+        return None
 
 
 def _pick(d: Path, part: str) -> Path | None:
@@ -167,6 +238,7 @@ def make_transcriber(cfg: dict, quiet: bool = False):
 
 
 def download_sherpa_model(dest: Path | None = None, model: str = SHERPA_MODEL) -> Path:
+    """Fetch a sherpa-onnx model from its GitHub release (int8 weights + tokens only)."""
     dest = Path(dest or ROOT / "models")
     dest.mkdir(parents=True, exist_ok=True)
     if (dest / model).exists():
@@ -184,11 +256,28 @@ def download_sherpa_model(dest: Path | None = None, model: str = SHERPA_MODEL) -
 
 
 # ----------------------------------------------------------------------- scoring
+def phrase_list(keywords) -> list[str]:
+    return [" ".join(TOKEN_RE.findall(p.lower())) for p in keywords or []]
+
+
+def find_phrases(toks: list[str], phrases: list[str], repeat_n: int = 3) -> list[str]:
+    """Excited phrases in a run of lowercase tokens, plus repeated words ("no x3")."""
+    text = " " + " ".join(toks) + " "
+    found = [p for p in phrases if p and text.count(f" {p} ")
+             for _ in range(text.count(f" {p} "))]
+    run = 1
+    for a, b in zip(toks, toks[1:]):           # "no no no", "go go go"
+        run = run + 1 if a == b else 1
+        if run == repeat_n:
+            found.append(f"{a} x{repeat_n}")
+    return found
+
+
 class SpeechTracker:
     def __init__(self, cfg: dict, trigger_ratio: float = 3.0):
         self.cfg = cfg
         self.trigger_ratio = trigger_ratio
-        self.phrases = [" ".join(TOKEN_RE.findall(p.lower())) for p in cfg.get("keywords", [])]
+        self.phrases = phrase_list(cfg.get("keywords", []))
         self.phrase_target = float(cfg.get("phrase_target", 3))
         self.repeat_n = int(cfg.get("repeat_words", 3))
         self.max_wps = float(cfg.get("max_words_per_s", 6))
@@ -217,14 +306,7 @@ class SpeechTracker:
     def phrase_hits(self, start: float, end: float) -> tuple[int, list[str]]:
         toks = [t for w in self.words if start <= w.start <= end
                 for t in TOKEN_RE.findall(w.text.lower())]
-        text = " " + " ".join(toks) + " "
-        found = [p for p in self.phrases if p and text.count(f" {p} ")
-                 for _ in range(text.count(f" {p} "))]
-        run = 1
-        for a, b in zip(toks, toks[1:]):           # "no no no", "go go go"
-            run = run + 1 if a == b else 1
-            if run == self.repeat_n:
-                found.append(f"{a} x{self.repeat_n}")
+        found = find_phrases(toks, self.phrases, self.repeat_n)
         return len(found), found
 
     def score(self, start: float, end: float) -> tuple[float, dict]:

@@ -15,7 +15,8 @@ from .config import channel_settings
 from .craft import render_reel
 from .agent import below_floor, candidate_json, chat_evidence, evaluate
 from .audio import SAMPLE_RATE, AudioTracker, anchor_on_peak, decode_pcm, window_levels
-from .craft.captions import Word, drop_dialogue, fake_words, subtitle_times, transcribe
+from .craft.captions import (Word, drop_dialogue, drop_sound_tags, fake_words, subtitle_times,
+                             transcribe)
 from .craft.facecam import detect_facecam
 from .nudity import check_clip as check_nudity
 from .detector import LagFilter, SpikeDetector, chat_values, score_spike
@@ -26,7 +27,8 @@ from .queue import ClipQueue
 from .recorder import DemoRecorder, LiveRecorder
 from .scheduler import in_window
 from .signals import score_signals, strength
-from .speech import SpeechTracker, make_transcriber
+from .speech import (TOKEN_RE, SpeechTracker, find_phrases, make_clip_transcriber,
+                     make_transcriber, phrase_list)
 
 NO_VIDEO_TIMEOUT_S = 45     # no buffered video this long after (re)starting = recorder is stuck
 RECORDER_RETRIES = 2        # restarts before a run gives up on the stream
@@ -230,6 +232,43 @@ def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | Non
     return None, "none"
 
 
+_clip_asr: dict = {}     # the per-clip caption model, loaded once (crafting is one at a time)
+
+
+def clip_words(raw: Path, cfg: dict, lead: float) -> list[Word] | None:
+    """The clip transcribed again with the caption model (Parakeet), timed from the clip
+    window start like the live transcript. None if the model is missing."""
+    key = str((cfg.get("speech") or {}).get("clip_model_dir") or "")
+    if key not in _clip_asr:
+        _clip_asr[key] = make_clip_transcriber(cfg.get("speech") or {})
+    asr = _clip_asr[key]
+    if asr is None:
+        return None
+    return [Word(w.text, w.start - lead, w.end - lead) for w in asr.transcribe_file(raw)
+            if w.start >= lead]
+
+
+def refresh_hook(receipt: dict, cfg: dict, words: list[Word], seed: int | None = None
+                 ) -> tuple[str | None, str | None]:
+    """A phrase or quote hook checked again against the clip's own transcript (times from
+    the reel start). The phrase or sentence has to be said in the reel's first
+    reel.hooks.quote_within_s seconds; if not, the next most specific hook is used.
+    The live transcript put "LET'S GO" on a card it was never said in, and quotes
+    a viewer only hears 30 s in."""
+    kind = receipt.get("hook_kind")
+    if kind not in ("phrase", "quote") or not words:
+        return receipt.get("hook"), kind
+    within = float((cfg["reel"].get("hooks") or {}).get("quote_within_s", 10))
+    sp = cfg.get("speech") or {}
+    toks = [t for w in words if 0 <= w.start <= within for t in TOKEN_RE.findall(w.text.lower())]
+    phrases = find_phrases(toks, phrase_list(sp.get("keywords")), int(sp.get("repeat_words", 3)))
+    r = {**receipt, "speech": {**(receipt.get("speech") or {}), "phrases": phrases},
+         "transcript": [[w.text, w.start, w.end] for w in words]}
+    if seed is None:
+        seed = int(receipt.get("peak_ts") or receipt.get("start_ts") or 0)
+    return write_hook(r, cfg, None, peak_rel=within, seed=seed, quote_before_s=within + 1)
+
+
 def craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                words=None, nudity_check=check_nudity) -> None:
     """words, if given, are timed from the clip window start (like the live transcript)."""
@@ -251,13 +290,20 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
             print(f"  no facecam found in clip {clip_id}: gameplay-only layout "
                   f"(set facecam: for {clip.channel} in config/channels.yaml to force it)")
         queue.update(clip_id, receipt={**clip.receipt, "facecam": facecam, "facecam_source": source})
-        if words is None and clip.receipt.get("transcript") and \
-                cfg["reel"].get("transcriber", "auto") == "auto":
+        engine_name = cfg["reel"].get("transcriber", "clip")
+        cap_source = "given" if words is not None else None
+        if words is None and engine_name == "clip":
+            words = clip_words(raw, cfg, lead)                        # better model, per clip
+            cap_source = "clip" if words is not None else None
+        if words is None and clip.receipt.get("transcript") and engine_name in ("auto", "clip"):
             words = [Word(*w) for w in clip.receipt["transcript"]]   # live stream transcript
+            cap_source = "live"
         if words is None:
             words = [Word(w.text, w.start - lead, w.end - lead)
-                     for w in transcribe(raw, cfg["reel"].get("transcriber", "none"))
+                     for w in transcribe(raw, "auto" if engine_name == "clip" else engine_name)
                      if w.start >= lead]
+            cap_source = engine_name
+        words = drop_sound_tags(words)
         if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
             words = drop_dialogue(words, [t - lead for t in subtitle_times(raw, box)])
         # re-time the clip around the loudest 250 ms (chat reacts seconds after the moment)
@@ -271,6 +317,7 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                           "peak_s": round(a[2] - a[0], 2)}
         lead += shift
         words = [Word(w.text, w.start - shift, w.end - shift) for w in words or []]
+        words = [w for w in words if w.end > 0 and (length is None or w.start < length)]
         chat = [[m[0] - shift, *m[1:]] for m in clip.receipt.get("chat") or []]
         reel_cfg = cfg["reel"]
         if facecam and reel_cfg["layout"] == "facecam_top" and \
@@ -280,10 +327,19 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
         # scan only the clip window, so the ranges line up with the reel
         safety = nudity_check(raw, cfg.get("nudity"), start=lead, facecam=facecam,
                               full_cam=full_cam)
-        receipt = {**queue.get(clip_id).receipt, "nudity": safety, "anchor": anchor}
+        receipt = {**queue.get(clip_id).receipt, "nudity": safety, "anchor": anchor,
+                   "caption_source": cap_source}
+        if cap_source == "clip":
+            receipt["caption_transcript"] = [[w.text, round(w.start, 2), round(w.end, 2)]
+                                             for w in words]
+            hook, kind = refresh_hook(receipt, cfg, words)
+            if hook != receipt.get("hook"):
+                print(f"  hook for clip {clip_id}: {receipt.get('hook')!r} -> {hook!r}")
+                receipt.setdefault("hook_live", receipt.get("hook"))   # first live pick
+                receipt.update(hook=hook, hook_kind=kind)
         if safety["decision"] != "clean":
             print(f"  nudity check clip {clip_id}: {safety['decision']} ({safety['why']})")
-        render_reel(raw, reel, reel_cfg, facecam, words, hook_text=clip.receipt.get("hook"),
+        render_reel(raw, reel, reel_cfg, facecam, words, hook_text=receipt.get("hook"),
                     chat=chat, censor=safety.get("ranges"), lead=lead, length=length)
         status = "held" if safety["decision"] == "review" else "crafted"
         queue.update(clip_id, reel_path=str(reel), status=status, receipt=receipt)

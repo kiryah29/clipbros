@@ -41,8 +41,9 @@ It prints the chat pace every 10 s and any spike it would have clipped.
    (or run a channel that isn't listed, e.g. from the control page) and each clip is
    searched for a face that stays put; the webcam overlay around it becomes the top band.
    No face found means a gameplay-only reel. The receipt says which (`facecam_source`).
-3. Speech-to-text (once): `python -m clipfarm setup-speech` downloads a small model
-   (~100 MB, into `models/`). Without it, speech scores 0 and everything else still works.
+3. Speech-to-text (once): `python -m clipfarm setup-speech --clip` downloads a small live
+   model (~100 MB) and the caption model (~460 MB) into `models/`. Without them, speech
+   scores 0 and captions fall back to the live transcript; everything else still works.
    Nudity check (once, optional): `python -m clipfarm setup-nudity` fetches its model
    (~12 MB). It is also fetched on the first clip; see "Nudity check" below.
 4. `python -m clipfarm run`. Start it **before** the stream goes live, or add a `schedule`
@@ -88,8 +89,22 @@ value is its loudest 250 ms RMS, so a short yell isn't averaged away. Settings i
 | `faster_whisper` | `pip install faster-whisper` | Exact word timings. x64 PCs only (no Windows ARM64 build) |
 | `auto` (default) | | faster-whisper if installed, else sherpa-onnx, else off |
 
-The transcript of the clip window is saved in the receipt and used for the reel captions
-(`reel.transcriber: auto`). If the PC can't keep up it skips old chunks and says so.
+The live transcript of the clip window is saved in the receipt and used for scoring and the
+first hook. If the PC can't keep up it skips old chunks and says so.
+
+**Captions** use a second pass (`reel.transcriber: clip`): once a clip is cut, its audio is
+transcribed again with Parakeet TDT 0.6B through sherpa-onnx (`python -m clipfarm
+setup-speech --clip`, ~460 MB, x64 and Windows ARM64). It times every word, so captions land
+on the word, and it does not loop or invent lines the way the small live model did. Sound
+tags (`*SCREAMS*`, `[MUSIC]`, `♪`) are never captioned. Without the model, captions fall back to
+the live transcript. The receipt says which (`caption_source`) and keeps the new transcript
+(`caption_transcript`).
+
+The same transcript re-checks a phrase or quote hook: the words must be said in the reel's
+first `reel.hooks.quote_within_s` seconds (10), and a quote must be a whole sentence (ends on
+. ! ? or a pause), never a fragment. Otherwise the next most specific hook is used; the old
+one is kept as `hook_live`. Re-render an older clip with the new captions: `python -m clipfarm
+render <id>`.
 
 ## ClipAgent check (`clipfarm/agent.py`)
 
@@ -140,7 +155,7 @@ with 1 false positive. Real chats are messier, so tune per channel in `channels.
 | `facecam_auto`              | Find the facecam in the clip when the channel has no `facecam` box (needs `opencv-python-headless`; model in `assets/models`) |
 | `backdrop`                  | Looping filler video under the gameplay (footage you own or licensed) |
 | `caption_style`             | `clipbros` (bold white caps, spoken word in lime), `pop`, `boxed`, `clean` |
-| `transcriber`               | `auto` (the live stream transcript, see Speech above), `faster_whisper`, or `none` |
+| `transcriber`               | `clip` (Parakeet on the cut clip, see Speech above), `auto` (the live stream transcript), `faster_whisper`, or `none` |
 | `hooks`, `hook_text` / `hook_seconds` | Hook card on the facecam/gameplay seam (`0` = whole clip). Text is written per clip from what happened (`clipfarm/hooks.py`): moment type, what the streamer said, what chat spammed, loudness, chat speed; no repeats across the last 6 clips. `hook_text` is the fallback |
 | `cta_text`                  | End card (empty = none; a hard cut loops better) |
 | `accent_color`, `hook_bg`, `hook_color`, `show_logo`, `logo_height`, `logo` | ClipBros brand layer (`craft/overlay.py`, tokens in `brand.py`) |

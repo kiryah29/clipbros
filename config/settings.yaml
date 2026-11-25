@@ -102,6 +102,7 @@ speech:
   engine: auto              # auto | faster_whisper | sherpa_onnx | none (see README)
   whisper_model: base.en    # faster_whisper model size
   sherpa_model_dir: models/sherpa-onnx-whisper-base.en   # python -m clipfarm setup-speech [--model tiny.en]
+  clip_model_dir: null      # caption model; null = models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
   language: en
   chunk_s: 4                # transcribe the stream in chunks this long
   max_backlog: 6            # if the PC falls behind, drop the oldest chunks
@@ -192,6 +193,7 @@ reel:
   hooks:
     max_chars: 42           # longer lines get skipped (card fits 3 lines on 9:16)
     max_quote_words: 6
+    quote_within_s: 10      # a quoted phrase or sentence must be said in the reel's first N s
     reaction_share: 0.15    # a reaction must be at least this share of chat's top tokens
     blocklist: []           # extra words never burned onto a clip (built-in list in hooks.py)
     templates: {}           # override a kind's lines, e.g. {chat: ["Chat went {chat_x}x faster"]}
@@ -201,6 +203,9 @@ reel:
   hook_seconds: 0           # 0 = hook card stays up the whole clip
   cta_text: "Follow for more clips"
   cta_seconds: 2.5
-  transcriber: auto         # auto = live stream transcript | faster_whisper | none
+  # Captions and hook quotes: clip = transcribe each cut clip again with Parakeet (real word
+  # timings; python -m clipfarm setup-speech --clip), falling back to the live transcript
+  # when the model is missing | auto = live stream transcript | faster_whisper | none
+  transcriber: clip
   loudness: {I: -14, TP: -1.5, LRA: 11}   # loudnorm target (two-pass) after a light compressor
   compressor: "acompressor=threshold=-12dB:ratio=2:attack=5:release=150"

@@ -6,7 +6,7 @@ receipt is read for concrete details, most specific first:
 
   moment     the game profile's moment type (config/games/<game>.yaml hook_templates)
   phrase     an excited phrase the streamer said ("no way", "no x3" -> "NO NO NO")
-  quote      a short line the streamer said right before the peak (transcript)
+  quote      a short whole sentence the streamer said right before the peak (transcript)
   type       ClipAgent clip type: clutch / fail / rage / donation / chat_interaction
              (before chat's reaction), hype / funny (after it)
   reaction   what chat spammed: laughing, W, L, shock, confusion, fear, RIP
@@ -143,25 +143,55 @@ def _said(phrase: str) -> str:
     return "" if word in FILLER else " ".join([word] * min(int(n), 4))   # not "THE THE THE"
 
 
+SENTENCE_END = (".", "!", "?")
+
+
+def sentences(transcript, pause_s: float = 0.6) -> list[list]:
+    """Transcript words grouped into sentences. A sentence ends on . ! or ?, or where the
+    streamer pauses for `pause_s`. The first group only counts if it starts with a capital
+    or after a pause, since the clip window can cut into the middle of a sentence."""
+    words = [(str(w[0]).strip(), float(w[1]), float(w[2])) for w in transcript or []
+             if str(w[0]).strip()]
+    out, cur, prev_end, clean_start = [], [], None, True
+    for text, start, end in words:
+        if cur and prev_end is not None and start - prev_end >= pause_s:
+            out.append((cur, clean_start))
+            cur, clean_start = [], True
+        if not cur and not out and prev_end is None:
+            clean_start = text[:1].isupper() or start >= pause_s
+        cur.append((text, start, end))
+        prev_end = end
+        if text.endswith(SENTENCE_END):
+            out.append((cur, clean_start))
+            cur, clean_start = [], True
+    if cur:
+        out.append((cur, False))          # cut off by the end of the window
+    return [s for s, ok in out if ok]
+
+
 def quote_near(transcript, peak_rel: float | None, before_s: float = 8.0,
                min_words: int = 3, max_words: int = 6) -> str:
-    """The streamer's last few words before the peak (times relative to clip start)."""
+    """The last whole sentence the streamer said shortly before the peak (times relative
+    to the clip start). Never a fragment cut at a random word: "if you can come back
+    have" and "Get PVP'd my" made the reviewed hooks read as broken."""
     if not transcript or peak_rel is None:
         return ""
-    words = [str(w[0]).strip() for w in transcript
-             if peak_rel - before_s <= float(w[1]) <= peak_rel + 1.0 and str(w[0]).strip()]
-    words = words[-max_words:]
-    content = [w for w in words if _norm(w) not in FILLER]
-    if len(words) < min_words or len(content) < 3:
-        return ""
-    return " ".join(words).strip(" ,.")
+    for sent in reversed(sentences(transcript)):
+        if sent[0][1] < peak_rel - before_s or sent[-1][1] > peak_rel + 1.0:
+            continue
+        words = [w[0] for w in sent]
+        content = [w for w in words if _norm(w) not in FILLER]
+        if min_words <= len(words) <= max_words and len(content) >= 2:
+            return " ".join(words).strip(" ,.")
+    return ""
 
 
 def _safe(value: str, blocklist: set[str]) -> bool:
     return not any(_norm(t) in blocklist for t in re.findall(r"[\w']+", value.lower()))
 
 
-def _facts(receipt: dict, cfg: dict, peak_rel: float | None, hcfg: dict) -> dict[str, str]:
+def _facts(receipt: dict, cfg: dict, peak_rel: float | None, hcfg: dict,
+           quote_before_s: float = 8.0) -> dict[str, str]:
     phrases = (receipt.get("speech") or {}).get("phrases") or []
     react = reaction_of(receipt.get("top_tokens"), float(hcfg.get("reaction_share", 0.15)))
     chat_x = receipt.get("ratio") or receipt.get("chat_ratio") or 0
@@ -169,7 +199,7 @@ def _facts(receipt: dict, cfg: dict, peak_rel: float | None, hcfg: dict) -> dict
         "streamer": cfg.get("streamer") or cfg.get("name") or "",
         "game": cfg.get("game_name") or "",
         "phrase": next((_said(p).upper() for p in phrases if _said(p)), ""),
-        "quote": quote_near(receipt.get("transcript"), peak_rel,
+        "quote": quote_near(receipt.get("transcript"), peak_rel, quote_before_s,
                             max_words=int(hcfg.get("max_quote_words", 6))),
         "chat_word": react[1] if react else "",
         "reaction": react[0] if react else "",
@@ -211,7 +241,8 @@ def _kinds(receipt: dict, cfg: dict, facts: dict) -> list[str]:
 
 
 def write_hook(receipt: dict, cfg: dict, history: HookHistory | None = None,
-               peak_rel: float | None = None, seed: int | None = None) -> tuple[str, str]:
+               peak_rel: float | None = None, seed: int | None = None,
+               quote_before_s: float = 8.0) -> tuple[str, str]:
     """(hook text, kind) for a clip. Records the pick in `history` if given."""
     reel = cfg["reel"]
     hcfg = reel.get("hooks") or {}
@@ -221,7 +252,8 @@ def write_hook(receipt: dict, cfg: dict, history: HookHistory | None = None,
         "hook_templates") or []
     block = DEFAULT_BLOCKLIST | {w.lower() for w in hcfg.get("blocklist") or []}
     max_chars = int(hcfg.get("max_chars", 42))
-    facts = {k: v for k, v in _facts(receipt, cfg, peak_rel, hcfg).items() if _safe(v, block)}
+    facts = {k: v for k, v in _facts(receipt, cfg, peak_rel, hcfg, quote_before_s).items()
+             if _safe(v, block)}
     rng = random.Random(seed)
 
     fallback = None
