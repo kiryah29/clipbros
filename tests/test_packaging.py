@@ -59,3 +59,19 @@ def test_local_settings_override_this_pc_only(tmp_path):
     (tmp_path / "settings.local.yaml").write_text("data_dir: D:/clipbros/data\nclip: {pre_roll_s: 10}\n")
     s = load_settings(tmp_path / "settings.yaml")
     assert s["data_dir"] == "D:/clipbros/data" and s["clip"] == {"pre_roll_s": 10, "max_length_s": 30}
+
+
+def test_short_file_takes_more_setup_to_reach_min_length():
+    # peak 3 s before the file ends: the start moves back instead of a 7 s reel
+    start, end, peak = anchor_on_peak(levels(30, {27: 0.9}), 0.25, 0, {**C, "min_length_s": 20})
+    assert (end, peak) == (30.0, 27.0) and end - start == 20
+
+
+def test_story_still_running_extends_past_max_length():
+    lv = levels(70, {10: 0.9})
+    talk = [(t, t + 0.5) for t in range(14, 50)]           # talking non-stop until 50 s
+    start, end, _ = anchor_on_peak(lv, 0.25, 0, {**C, "anchor": {**C["anchor"], "story_max_s": 40}},
+                                   talk)
+    assert start == 6.0 and end == 46.0                    # capped at story_max_s
+    quiet = [(14, 14.5), (40, 41)]                         # a pause before the end: no extension
+    assert anchor_on_peak(lv, 0.25, 0, C, quiet)[1] == 21.0

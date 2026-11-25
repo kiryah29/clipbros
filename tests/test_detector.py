@@ -54,4 +54,4 @@ def test_clip_window_looks_back_and_caps_length():
     sp = run(chat).spikes[0]
     start, end = clip_window(sp, S["clip"])
     assert start < sp.peak_ts < end
-    assert end - start <= S["clip"]["max_length_s"]
+    assert end - start <= S["clip"]["raw_max_s"]   # the reel itself is anchored inside

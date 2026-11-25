@@ -16,13 +16,17 @@ detector:
 
 clip:
   pre_roll_s: 12            # look-back searched for the moment: chat lags it by 3-8 s
-  post_roll_s: 8
-  max_length_s: 30          # reels are 15-30 s
-  min_length_s: 15
+  post_roll_s: 16           # tail after the moment, so the reel can reach min_length_s
+  max_length_s: 30          # reels are 20-30 s (longer only while a story is still being told)
+  min_length_s: 20          # Hugo 2026-11-25: 11-16 s reels were too short
+  raw_max_s: 50             # the cut from the buffer; the reel is re-anchored inside it
   # The reel is re-timed on the loudest 250 ms of audio in that window (engine.py,
   # audio.anchor_on_peak): it starts pre_s before the peak and ends post_s after the
-  # reaction fades, so the moment lands in the first ~5 s instead of at ~18 s.
-  anchor: {enabled: true, pre_s: 4, post_s: 7, fade_ratio: 0.5, fade_gap_s: 2}
+  # reaction fades, so the moment lands in the first ~6 s instead of at ~18 s. If the
+  # streamer keeps talking past the end (next word within story_gap_s), the reel follows
+  # the story up to story_max_s.
+  anchor: {enabled: true, pre_s: 6, post_s: 10, fade_ratio: 0.5, fade_gap_s: 2,
+           story_gap_s: 0.8, story_max_s: 40}
   buffer_minutes: 5         # rolling video buffer kept on disk per channel
   quality: "1080p60,1080p,best"
 
@@ -92,7 +96,7 @@ audio:
   confirm_chat_ratio: 1.5
   silence_floor: 0.01       # quiet stretches don't drag "normal" below this (RMS 0..1)
   pre_roll_s: 12            # look-back window; the reel itself is anchored on the peak
-  post_roll_s: 12           # keep the reaction after the scream (6 s cut off "whoa whoa")
+  post_roll_s: 16           # keep the reaction after the scream (6 s cut off "whoa whoa")
 
 speech:
   engine: auto              # auto | faster_whisper | sherpa_onnx | none (see README)
