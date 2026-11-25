@@ -274,6 +274,15 @@ class RunManager:
         finally:
             q.db.close()
 
+    def clip(self, rid: str, cid: int):
+        q = self._queue(rid)
+        if not q:
+            return None
+        try:
+            return q.get(cid)
+        finally:
+            q.db.close()
+
     def clip_file(self, rid: str, cid: int) -> Path | None:
         q = self._queue(rid)
         if not q:
@@ -305,9 +314,11 @@ class RunManager:
 
 # --------------------------------------------------------------------------- pages
 class ControlPages:
-    def __init__(self, runs: RunManager, sessions: Sessions, password_hash: str | None, page):
+    def __init__(self, runs: RunManager, sessions: Sessions, password_hash: str | None, page,
+                 posting: bool = False):
         self.runs, self.sessions, self.hash, self.page = runs, sessions, password_hash, page
         self.limiter = LoginLimiter()
+        self.posting = posting   # the owner turned TikTok posting on (CONTROL_ALLOW_POSTING=1)
 
     def _signin_form(self, msg: str = "") -> str:
         return (f"{msg}<form class='card' method='post' action='/signin'>"
@@ -451,6 +462,8 @@ class ControlPages:
                     f"<span class='mut'>triggers: {e(', '.join(rc.get('triggers', [])))} &middot; "
                     f"hook: {e(str(rc.get('hook', '')))}</span><br><span class='mut'>signals: {sig}</span>{safety}</p>"
                     f"<div class='row'><a class='btn ghost' href='{url}.mp4?dl=1'>Download</a>"
+                    + (f"<a class='btn' href='{url}/tiktok'>Post to TikTok</a>"
+                       if self.posting and c.status not in ("rejected", "posted") else "") +
                     f"<form method='post' action='{url}/approve'><button>Approve</button></form>"
                     f"<form method='post' action='{url}/reject'><button class='ghost'>Reject</button></form></div></div>")
         body = "".join(out) or "<p class='mut'>No finished clips yet.</p>"

@@ -56,6 +56,12 @@ def default_caption(channel: str) -> str:
     return template.replace("{channel}", channel)[:2200]
 
 
+def caption(clip) -> str:
+    """The hook card's text on the first line, then the default caption with hashtags."""
+    hook = str((clip.receipt or {}).get("hook") or "").strip()
+    return (f"{hook}\n{default_caption(clip.channel)}" if hook else default_caption(clip.channel))[:2200]
+
+
 FRIENDLY_ERRORS = {
     "unaudited_client_can_only_post_to_private_accounts":
         "TikTok only lets an app that has not been audited post to a PRIVATE TikTok account. Set your TikTok account "
@@ -85,6 +91,7 @@ PRIVACY_LABELS = {"PUBLIC_TO_EVERYONE": "Everyone", "MUTUAL_FOLLOW_FRIENDS": "Fr
 class App:
     def __init__(self, cfg: Config, queue: ClipQueue, store: TokenStore):
         self.cfg, self.queue, self.store = cfg, queue, store
+        self.runs: RunManager | None = None    # control runs, where the live clips are
         self.states: set[str] = set()
         self.http: aiohttp.ClientSession | None = None
 
@@ -108,6 +115,33 @@ class App:
         p = Path(c.reel_path) if c and c.reel_path else None
         return p if p and p.is_file() else None
 
+    def target(self, request: web.Request) -> dict:
+        """The clip a review/post URL points at: one in the own queue (/clip/7) or one from a
+        control run (/runs/<run>/clip/7/tiktok)."""
+        cid = int(request.match_info["id"] if "id" in request.match_info else request.match_info["cid"])
+        rid = request.match_info.get("rid")
+        if rid is None:
+            c, p = self.queue.get(cid), self.clip_path(cid)
+            return {"clip": c, "path": p, "video": f"/video/{cid}", "post": f"/clip/{cid}/post",
+                    "back": f"/clip/{cid}", "mark": lambda st: self.queue.update(cid, status=st),
+                    "posted_status": "approved"}
+        if not self.runs or rid not in self.runs.runs:
+            raise web.HTTPNotFound()
+        base = f"/runs/{rid}/clip/{cid}"
+        return {"clip": self.runs.clip(rid, cid), "path": self.runs.clip_file(rid, cid),
+                "video": f"{base}.mp4", "post": f"{base}/tiktok/post", "back": f"{base}/tiktok",
+                "mark": lambda st: self.runs.set_status(rid, cid, st), "posted_status": "posted"}
+
+    def run_clips(self) -> list[tuple[dict, object]]:
+        """Rendered clips from the control runs, newest run first, rejected and posted ones left out."""
+        if not self.runs:
+            return []
+        out = []
+        for r in sorted(self.runs.runs.values(), key=lambda r: r["created"], reverse=True):
+            out += [(r, c) for c in self.runs.clips(r["id"])
+                    if c.reel_path and c.status not in ("rejected", "posted")]
+        return out
+
     # -- pages ----------------------------------------------------------------------
     async def index(self, request: web.Request) -> web.Response:
         tok = await self.token()
@@ -127,6 +161,15 @@ class App:
             acct = ("<div class='card'><p>Connect your TikTok account to post your clips.</p>"
                     "<a class='btn' href='/login'>Connect TikTok</a></div>")
         clips = [c for c in self.queue.ranked(None, 50) if c.reel_path and Path(c.reel_path).is_file()]
+        runs = "".join(
+            f"<div class='card row'><div><b>{e(c.channel)}</b> &middot; clip #{c.id} &middot; {e(c.status)}<br>"
+            f"<span class='mut'>{e(str(c.receipt.get('hook', '')))}</span>"
+            + ("<br><span class='err'>Held by the nudity check: watch it before posting</span>"
+               if c.status == "held" else "") + "</div>"
+            f"<a class='btn' style='margin-left:auto' href='/runs/{r['id']}/clip/{c.id}/tiktok'>Review</a></div>"
+            for r, c in self.run_clips())
+        if runs:
+            acct += "<h2>Clips from test runs</h2>" + runs
         if clips:
             items = "".join(
                 f"<div class='card row'><div><b>Clip #{c.id}</b> &middot; {e(c.channel)}<br>"
@@ -135,7 +178,7 @@ class App:
                    if c.status == "held" else "") + "</div>"
                 f"<a class='btn' style='margin-left:auto' href='/clip/{c.id}'>Review</a></div>" for c in clips)
         else:
-            items = "<p class='mut'>No rendered clips yet. Run <code>python -m clipfarm demo</code> first.</p>"
+            items = "<p class='mut'>No rendered clips in your own queue.</p>"
         return page("Clips", acct + "<h2>Your clips</h2>" + items)
 
     async def login(self, request: web.Request) -> web.Response:
@@ -176,10 +219,11 @@ class App:
         return web.FileResponse(p)
 
     async def review(self, request: web.Request) -> web.Response:
-        cid = int(request.match_info["id"])
-        c = self.queue.get(cid)
-        if not c or not self.clip_path(cid):
+        t = self.target(request)
+        c = t["clip"]
+        if not c or not t["path"]:
             raise web.HTTPNotFound()
+        cid = c.id
         tok = await self.token()
         if not tok:
             raise web.HTTPFound("/login")
@@ -190,6 +234,8 @@ class App:
         opts = info.get("privacy_level_options", [])
         options = "<option value='' selected disabled>Select who can view this video</option>" + "".join(
             f"<option value='{e(o)}'>{e(PRIVACY_LABELS.get(o, o))}</option>" for o in opts)
+        held = ("<p class='err'>Held by the nudity check: watch the whole clip before posting.</p>"
+                if c.status == "held" else "")
         dis = {k: info.get(f"{k}_disabled", False) for k in ("comment", "duet", "stitch")}
         toggles = "".join(
             f"<label class='opt'><input type='checkbox' name='allow_{k}' {'disabled' if dis[k] else ''}> Allow {k}s"
@@ -197,9 +243,9 @@ class App:
         body = f"""
 <div class='card row'><div>Posting as <b>@{e(info.get('creator_username', ''))}</b>
  ({e(info.get('creator_nickname', ''))})</div></div>
-<video controls playsinline src='/video/{cid}'></video>
-<form id='f' class='card' method='post' action='/clip/{cid}/post'>
- <label>Caption<textarea name='title' rows='3' maxlength='2200'>{e(default_caption(c.channel))}</textarea></label>
+{held}<video controls playsinline src='{t["video"]}'></video>
+<form id='f' class='card' method='post' action='{t["post"]}'>
+ <label>Caption<textarea name='title' rows='3' maxlength='2200'>{e(caption(c))}</textarea></label>
  <label>Who can view this video<select name='privacy' id='privacy' required>{options}</select></label>
  <p class='mut' style='margin:6px 0 0'>Unaudited apps can only post as "Only me" until TikTok approves the app.</p>
  <div style='margin-top:10px'><b>Allow users to</b>{toggles}</div>
@@ -226,9 +272,9 @@ f.addEventListener('input',sync);f.addEventListener('change',sync);sync();
         return page(f"Review clip {cid}", body)
 
     async def post(self, request: web.Request) -> web.Response:
-        cid = int(request.match_info["id"])
-        p = self.clip_path(cid)
-        if not p:
+        t = self.target(request)
+        p = t["path"]
+        if not t["clip"] or not p:
             raise web.HTTPNotFound()
         tok = await self.token()
         if not tok:
@@ -257,8 +303,8 @@ f.addEventListener('input',sync);f.addEventListener('change',sync);sync();
         try:
             pid = await self.client().publish_video(tok, p, post_info)
         except TikTokError as ex:
-            return page("Not posted", f"<p class='err'>{friendly(ex)}</p><a href='/clip/{cid}'>Back</a>")
-        self.queue.update(cid, status="approved")
+            return page("Not posted", f"<p class='err'>{friendly(ex)}</p><a href='{t['back']}'>Back</a>")
+        t["mark"](t["posted_status"])
         body = f"""<div class='card'><p>Upload sent to TikTok. Checking status&hellip;</p><p id='s' class='mut'>PROCESSING</p></div>
 <script>
 async function poll(){{const r=await fetch('/status/{e(pid)}');const j=await r.json();
@@ -285,7 +331,8 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
     app_state = App(cfg, ClipQueue(db_path), TokenStore(token_path))
     sessions = Sessions()
     runs = RunManager(control_dir or db_path.parent / "control", keep_days)
-    pages = ControlPages(runs, sessions, password_hash, page)
+    app_state.runs = runs
+    pages = ControlPages(runs, sessions, password_hash, page, posting=allow_posting)
     redirect_path = urlparse(cfg.redirect_uri).path or "/callback"
     public = re.compile(r"^/(|index\.html|terms\.html|privacy\.html|tiktok[A-Za-z0-9]+\.txt|signin)$")
     app = web.Application(middlewares=[auth_middleware(sessions, lambda path: bool(public.match(path))
@@ -318,5 +365,7 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
             web.post("/logout", app_state.logout),
             web.get(r"/video/{id:\d+}", app_state.video), web.get(r"/clip/{id:\d+}", app_state.review),
             web.post(r"/clip/{id:\d+}/post", app_state.post), web.get("/status/{pid}", app_state.status),
+            web.get(r"/runs/{rid}/clip/{cid:\d+}/tiktok", app_state.review),
+            web.post(r"/runs/{rid}/clip/{cid:\d+}/tiktok/post", app_state.post),
         ])
     return app

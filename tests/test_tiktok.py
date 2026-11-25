@@ -39,8 +39,13 @@ def fake_tiktok(calls):
     async def status(req):
         return web.json_response({"data": {"status": "PUBLISH_COMPLETE"}, "error": {"code": "ok"}})
 
+    async def user(req):
+        return web.json_response({"data": {"user": {"display_name": "Bob", "avatar_url": ""}},
+                                  "error": {"code": "ok"}})
+
     app = web.Application(client_max_size=10 * 1024 * 1024)
-    app.add_routes([web.post("/v2/post/publish/video/init/", init), web.put("/up", up),
+    app.add_routes([web.get("/v2/user/info/", user),
+                    web.post("/v2/post/publish/video/init/", init), web.put("/up", up),
                     web.post("/v2/post/publish/creator_info/query/", creator),
                     web.post("/v2/post/publish/status/fetch/", status)])
     return app
@@ -180,3 +185,67 @@ def test_default_caption(monkeypatch):
     assert default_caption("xqc") == "Clip from xqc #fyp #streamer #clips"
     monkeypatch.setenv("TIKTOK_DEFAULT_CAPTION", "{channel} highlights #twitch")
     assert default_caption("xqc") == "xqc highlights #twitch"
+
+
+def test_clips_from_test_runs_can_be_reviewed_and_posted(tmp_path, monkeypatch):
+    """The live clips sit in control run folders, not in the own queue: they must be listed
+    on /tiktok, get a Post button on /clips, and be marked 'posted' afterwards."""
+    import time as _time
+    calls = {}
+    rid = "20261125-173803-7542"
+    run_dir = tmp_path / "control" / rid
+    (run_dir / "clips").mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps(
+        {"id": rid, "channel": "nickmercs", "game": "gta6", "minutes": 30, "status": "done",
+         "created": _time.time(), "started": _time.time(), "ended": _time.time()}))
+    reel = run_dir / "clips" / "00003_reel.mp4"
+    reel.write_bytes(b"0" * 100)
+    rq = ClipQueue(run_dir / "queue.db")
+    cid = rq.add("nickmercs", "twitch", 0, 10, 5.0, {"hook": 'Nick: "DUDE DUDE DUDE"'})
+    rq.update(cid, reel_path=str(reel), status="crafted")
+    rq.db.close()
+    tokfile = tmp_path / "tok.json"
+    api.TokenStore(tokfile).save(api.Token({"access_token": "t", "expires_in": 3600}))
+
+    async def run():
+        runner = web.AppRunner(fake_tiktok(calls))
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        monkeypatch.setattr(api, "API", f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}")
+        app = build_app(CFG, tmp_path / "q.db", tokfile, password_hash=hash_password("pw", 1000),
+                        allow_posting=True, control_dir=tmp_path / "control")
+        r2 = web.AppRunner(app)
+        await r2.setup()
+        s2 = web.TCPSite(r2, "127.0.0.1", 0)
+        await s2.start()
+        base = f"http://127.0.0.1:{s2._server.sockets[0].getsockname()[1]}"
+        url = f"{base}/runs/{rid}/clip/{cid}/tiktok"
+        out = {}
+        async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as s:
+            await s.post(base + "/signin", data={"password": "pw"})
+            out["index"] = await (await s.get(base + "/tiktok")).text()
+            out["clips"] = await (await s.get(base + "/clips")).text()
+            out["review"] = await (await s.get(url)).text()
+            out["bad_run"] = (await s.get(f"{base}/runs/nope/clip/{cid}/tiktok")).status
+            out["ok"] = await (await s.post(url + "/post", data={
+                "title": "t", "privacy": "SELF_ONLY", "consent": "on"})).text()
+            out["index_after"] = await (await s.get(base + "/tiktok")).text()
+        await r2.cleanup()
+        await runner.cleanup()
+        return out
+
+    out = asyncio.run(run())
+    assert f"/runs/{rid}/clip/{cid}/tiktok" in out["index"] and "Clips from test runs" in out["index"]
+    assert f"/runs/{rid}/clip/{cid}/tiktok'>Post to TikTok" in out["clips"]
+    assert f"src='/runs/{rid}/clip/{cid}.mp4'" in out["review"]
+    assert "Nick: &quot;DUDE DUDE DUDE&quot;" in out["review"]          # hook prefilled in the caption
+    assert out["bad_run"] == 404 and "Upload sent" in out["ok"]
+    assert ClipQueue(run_dir / "queue.db").get(cid).status == "posted"
+    assert f"/runs/{rid}/clip/{cid}/tiktok" not in out["index_after"]    # posted: off the list
+
+
+def test_post_buttons_hidden_without_the_switch(tmp_path):
+    from clipfarm.control import ControlPages, RunManager, Sessions
+    pages = ControlPages(RunManager(tmp_path / "control"), Sessions(), None, None)
+    assert pages.posting is False

@@ -298,6 +298,12 @@ follows TikTok's UX rules: account shown, no default privacy choice, interaction
 off, commercial-content disclosure, consent declaration, and an explicit Post click.
 The token is stored in `data/tiktok_token.json` (gitignored).
 
+Clips from control runs (`/control`) are postable too: `/tiktok` lists them under "Clips
+from test runs" (newest run first, rejected and posted ones left out), and `/clips` shows a
+**Post to TikTok** button per clip. The caption is prefilled with the clip's hook and the
+default caption. After a post the clip's status is `posted`. Posting is behind the shared
+control password: anyone who has it can post to the connected account.
+
 ## Control page (test runs from another computer)
 
 The `tiktok-app` web app also has a password-protected control page at `/control`.
