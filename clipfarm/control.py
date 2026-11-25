@@ -294,6 +294,16 @@ class RunManager:
         p = Path(c.reel_path).resolve() if c and c.reel_path else None
         return p if p and p.is_file() and p.is_relative_to(self.dir(rid).resolve()) else None
 
+    def update_receipt(self, rid: str, cid: int, patch: dict) -> None:
+        q = self._queue(rid)
+        if q:
+            try:
+                c = q.get(cid)
+                if c:
+                    q.update(cid, receipt={**c.receipt, **patch})
+            finally:
+                q.db.close()
+
     def set_status(self, rid: str, cid: int, status: str) -> None:
         q = self._queue(rid)
         if q:
@@ -463,7 +473,13 @@ class ControlPages:
                     f"hook: {e(str(rc.get('hook', '')))}</span><br><span class='mut'>signals: {sig}</span>{safety}</p>"
                     f"<div class='row'><a class='btn ghost' href='{url}.mp4?dl=1'>Download</a>"
                     + (f"<a class='btn' href='{url}/tiktok'>Post to TikTok</a>"
-                       if self.posting and c.status not in ("rejected", "posted") else "") +
+                       if self.posting and c.status not in ("rejected", "posted") else "")
+                    + (f"<a class='btn' href='{url}/instagram'>Post to Instagram</a>"
+                       if self.posting and c.status != "rejected"
+                       and "instagram" not in (rc.get("posted_to") or {}) else "")
+                    + (f"<a class='btn ghost' href='{e(rc['posted_to']['instagram'])}' target='_blank' "
+                       f"rel='noopener'>On Instagram</a>"
+                       if (rc.get("posted_to") or {}).get("instagram", "").startswith("https://") else "") +
                     f"<form method='post' action='{url}/approve'><button>Approve</button></form>"
                     f"<form method='post' action='{url}/reject'><button class='ghost'>Reject</button></form></div></div>")
         body = "".join(out) or "<p class='mut'>No finished clips yet.</p>"
