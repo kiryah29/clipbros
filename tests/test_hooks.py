@@ -45,11 +45,14 @@ def test_quote_from_transcript_before_peak():
 def test_consecutive_clips_do_not_repeat():
     hist = HookHistory()
     r = chat([("hello", 5)], ratio=4.0)
-    hooks = [write_hook(r, CFG, hist, seed=7)[0] for _ in range(4)]
+    # chat-speed lines are off by default (a stranger can't read "chat went 4x faster")
+    assert write_hook(r, CFG, seed=7) == ("WAIT FOR IT...", "fallback")
+    cfg = {**CFG, "reel": {**CFG["reel"], "hooks": {**CFG["reel"]["hooks"], "drop_kinds": []}}}
+    hooks = [write_hook(r, cfg, hist, seed=7)[0] for _ in range(4)]
     assert len(set(hooks)) == 4                       # the chat pool has 4 lines
     assert "Chat went 4x faster for this" in hooks
     # once the pool is exhausted it still returns a usable line, never crashes
-    assert write_hook(r, CFG, hist, seed=7)[0] in hooks
+    assert write_hook(r, cfg, hist, seed=7)[0] in hooks
 
 
 def test_same_clip_same_hook():
@@ -61,7 +64,7 @@ def test_unsafe_words_never_reach_the_card():
     r = chat([], speech={"phrases": ["shit"]},
              transcript=[["what", 1, 1.2], ["the", 1.2, 1.3], ["fuck", 1.3, 1.6], ["bro", 1.6, 2]])
     text, kind = write_hook(r, CFG, peak_rel=2.0, seed=1)
-    assert kind == "chat" and "SHIT" not in text.upper() and "FUCK" not in text.upper()
+    assert kind == "fallback" and "SHIT" not in text.upper() and "FUCK" not in text.upper()
     custom = {**CFG, "reel": {**CFG["reel"], "hooks": {"blocklist": ["kekw"]}}}
     assert "KEKW" not in write_hook(chat([("KEKW", 50)]), custom, seed=0)[0]
 

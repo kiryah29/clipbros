@@ -214,7 +214,43 @@ Set `game: gta6` (and `streamer: "Name"` for hooks) on a channel to load
 * **safety holds**: moments marked `safety: review` (gore) set `safety_review: true` in the
   receipt so they are never auto-posted.
 
+* **hook writer facts**: `nouns` (concrete words that make a hook score higher),
+  `sound_words` (sound event -> hook word), `hud_events` / `hud_counters` (HUD matching,
+  not built yet) and `hooks.style_weights` / `hooks.extra_patterns`. Copy
+  `config/games/_template.yaml` to add a game; no code changes.
+
 Merge order is `settings.yaml` < game profile < the channel's own overrides.
+
+## Smarter hooks and the hook lab (`clipfarm/hookwriter.py`, `clipfarm/hooklab.py`)
+
+The rule writer collects facts about a clip and fills them into a few hook patterns. A
+pattern is only used when every slot comes from a real fact, so it never invents anything:
+
+| Style | Pattern | Fact needed |
+| --- | --- | --- |
+| story | Speed tried to steal the cop car | "I'm gonna ..." / "let's ..." before the peak |
+| warning | DO NOT steal the cop car in GTA 6 | a plan + a game + something went wrong (chat laughed / L / RIP, fail) |
+| prediction | Speed said "Watch this" | a confident line before the peak + it went wrong |
+| story_outcome | ... It failed | HUD reports a fail (HUD matching, later) |
+| payoff | Wait for the cops | a sound/HUD event mapped to a word, peak 3 s+ in |
+| chat_voice | Chat: "he really thought that would work" | a reaction 2+ other chatters echoed (no orders, no talking to the streamer, strict blocklist) |
+| viewer_title | the Twitch clip title | a viewer renamed their clip (Twitch API, later) |
+| game | the profile's patterns and moment templates | the profile |
+| quote | Speed: "..." | demoted |
+
+Candidates are scored (style weight, 4-8 words, concrete words from the facts, minus
+generic words and minus repeating the reel's first spoken line) and the channel's recent
+hooks are skipped by text and by style. Nothing good enough (`min_score`) means the old
+templates, with phrase/quote used last and the chat-speed lines gone. `my` becomes
+`his`/`her`/`their` from the channel's `pronoun:` (default he). The receipt keeps
+`hook_writer`, `hook_facts` and `hook_candidates`.
+
+It is **off for posted clips** until you switch it on: `reel.hooks.writer: rules` in
+`config/settings.yaml`. Before that, compare in the **hook lab**: clipbros.app/hooklab
+(signed in) shows per clip the hook on the video, the rule writer's candidates and the facts
+behind them. Pick the best or "none are good" and flag bad candidates; picks are saved in
+`data/hooklab/picks.json` and the summary shows coverage and which styles win. Terminal
+version: `python -m clipfarm hooklab [--run <run id>]` (read-only, safe while the app runs).
 
 ## Nudity check
 
@@ -255,6 +291,8 @@ clipfarm/recorder.py     rolling live buffer + cutting; demo video generator
 clipfarm/queue.py        SQLite ranked queue with receipts
 config/games/            game profiles (moment hints, hooks, clip windows)
 clipfarm/moments.py      labels spikes with a game moment, picks hook + clip window
+clipfarm/hookwriter.py   rule-based hooks: facts -> patterns -> scored candidates
+clipfarm/hooklab.py      hook lab: compare hooks per clip, save picks (/hooklab)
 clipfarm/craft/          9:16 reel renderer, ASS captions, brand overlay (logo/hook card)
 clipfarm/scheduler.py    smart scheduling windows
 clipfarm/engine.py       wires it together (demo + live)

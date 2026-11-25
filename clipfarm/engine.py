@@ -23,6 +23,7 @@ from .nudity import check_clip as check_nudity
 from .detector import LagFilter, SpikeDetector, chat_values, score_spike
 from .models import Spike
 from .hooks import HookHistory, write_hook
+from .hookwriter import hook_cfg, pick_hook
 from .moments import classify, clip_window_for
 from .queue import ClipQueue
 from .recorder import DemoRecorder, LiveRecorder
@@ -143,9 +144,8 @@ def score_moment(m: dict, cfg: dict, chat: SpikeDetector | None, audio: AudioTra
     if (cfg.get("clip_agent") or {}).get("enabled", True):
         r["clip_agent"] = evaluate(r, cfg, score, start, end, origin_ts)
     peak = sp.peak_ts if sp else (m.get("audio") or {}).get("peak_ts")
-    r["hook"], r["hook_kind"] = write_hook(
-        r, cfg, hooks, peak_rel=None if peak is None else peak - start,
-        seed=int(peak if peak is not None else start))
+    r.update(pick_hook(r, cfg, hooks, peak=None if peak is None else peak - start,
+                       seed=int(peak if peak is not None else start)))
     return score, r
 
 
@@ -234,6 +234,7 @@ def pick_facecam(raw: Path, channel: str, reel_cfg: dict, configured: dict | Non
     return None, "none"
 
 
+_craft_history: dict[str, HookHistory] = {}   # channel -> recent hooks picked at craft time
 _clip_asr: dict = {}     # the per-clip caption model, loaded once (crafting is one at a time)
 
 
@@ -362,8 +363,8 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
                 anchor = {"shift_s": round(shift, 2), "length_s": round(length, 2),
                           "peak_s": round(a[2] - a[0], 2)}
         lead += shift
-        words = [replace(w, start=w.start - shift, end=w.end - shift) for w in words or []]
-        words = [w for w in words if w.end > 0 and (length is None or w.start < length)]
+        shifted = [replace(w, start=w.start - shift, end=w.end - shift) for w in words or []]
+        words = [w for w in shifted if w.end > 0 and (length is None or w.start < length)]
         chat = [[m[0] - shift, *m[1:]] for m in clip.receipt.get("chat") or []]
         reel_cfg = cfg["reel"]
         if facecam and reel_cfg["layout"] == "facecam_top" and \
@@ -378,11 +379,27 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
         if cap_source == "clip":
             receipt["caption_transcript"] = [[w.text, round(w.start, 2), round(w.end, 2), w.voice]
                                              for w in words]
+        if hook_cfg(cfg).get("writer", "templates") == "rules":
+            # the whole clip's words (pre-roll included, so a plan said before the reel starts
+            # still counts), chat and the peak, all timed from the reel start
+            peak = anchor["peak_s"] if anchor else None
+            if peak is None and receipt.get("peak_ts") and receipt.get("start_ts"):
+                peak = receipt["peak_ts"] - receipt["start_ts"] - shift
+            picked = pick_hook(receipt, cfg, _craft_history.setdefault(clip.channel, HookHistory()),
+                               words=[[w.text, w.start, w.end, w.voice] for w in shifted],
+                               chat=chat, peak=peak,
+                               seed=int(receipt.get("peak_ts") or receipt.get("start_ts") or 0))
+            hook = picked["hook"]
+        elif cap_source == "clip":
             hook, kind = refresh_hook(receipt, cfg, words)
-            if hook != receipt.get("hook"):
-                print(f"  hook for clip {clip_id}: {receipt.get('hook')!r} -> {hook!r}")
-                receipt.setdefault("hook_live", receipt.get("hook"))   # first live pick
-                receipt.update(hook=hook, hook_kind=kind)
+            picked = {"hook": hook, "hook_kind": kind}
+        else:
+            picked = None
+        if picked and picked["hook"] != receipt.get("hook"):
+            print(f"  hook for clip {clip_id}: {receipt.get('hook')!r} -> {picked['hook']!r}")
+            receipt.setdefault("hook_live", receipt.get("hook"))   # first live pick
+        if picked:
+            receipt.update(picked)
         if safety["decision"] != "clean":
             print(f"  nudity check clip {clip_id}: {safety['decision']} ({safety['why']})")
         render_reel(raw, reel, reel_cfg, facecam, words, hook_text=receipt.get("hook"),

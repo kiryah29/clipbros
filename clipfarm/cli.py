@@ -109,6 +109,8 @@ def main(argv: list[str] | None = None) -> None:
     vo.add_argument("--to", dest="end", type=float)
     vo.add_argument("--forget", action="store_true", help="delete this streamer's voiceprint")
 
+    hl = sub.add_parser("hooklab", help="today's hooks next to the rule writer's candidates, per clip")
+    hl.add_argument("--run", default=None, help="only this control run id")
     tp = sub.add_parser("tiktok-app", help="web app: connect TikTok, review a clip, post it (Content Posting API)")
     tp.add_argument("--host", default="127.0.0.1")
     tp.add_argument("--port", type=int, default=8000)
@@ -220,6 +222,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Nudity check ready: {nudity.model_path(cfg)} ({det.engine})")
         if a.clip:
             print(json.dumps(nudity.check_clip(Path(a.clip), cfg, det), indent=2))
+    elif a.cmd == "hooklab":
+        from .hooklab import ReadOnlyRuns, print_lab
+        print_lab(ReadOnlyRuns(data_dir / "control"), a.run)
     elif a.cmd == "tiktok-app":
         from aiohttp import web
         from .tiktok.api import Config as TTConfig, TikTokError

@@ -12,8 +12,11 @@ receipt is read for concrete details, most specific first:
   reaction   what chat spammed: laughing, W, L, shock, confusion, fear, RIP
   big        stream got very loud AND chat went far past a normal spike
   audio      loud on its own (screaming)
-  chat       chat sped up (uses the real "6x faster" number)
+  chat       chat sped up (uses the real "6x faster" number); off by default
+             (reel.hooks.drop_kinds): a stranger can't tell what "chat went 6x faster" means
   fallback   reel.hook_text
+
+The rule-based writer (hookwriter.py, reel.hooks.writer: rules) falls back to this one.
 
 Each kind has several templates (config: reel.hooks.templates). A template whose
 details are missing, unsafe, or too long is skipped, and the last few hooks of the
@@ -104,6 +107,7 @@ class HookHistory:
     def __init__(self, size: int = 6):
         self.texts: deque[str] = deque(maxlen=size)
         self.templates: deque[str] = deque(maxlen=size)
+        self.styles: deque[str] = deque(maxlen=size)   # hook kinds/styles (hookwriter.py)
 
     def seen(self, text: str, template: str) -> bool:
         return text.lower() in (t.lower() for t in self.texts) or template in self.templates
@@ -242,8 +246,10 @@ def _kinds(receipt: dict, cfg: dict, facts: dict) -> list[str]:
 
 def write_hook(receipt: dict, cfg: dict, history: HookHistory | None = None,
                peak_rel: float | None = None, seed: int | None = None,
-               quote_before_s: float = 8.0) -> tuple[str, str]:
-    """(hook text, kind) for a clip. Records the pick in `history` if given."""
+               quote_before_s: float = 8.0, demote: set[str] | None = None) -> tuple[str, str]:
+    """(hook text, kind) for a clip. Records the pick in `history` if given. Kinds in
+    `demote` are only used when nothing else fits (the rule writer demotes phrase/quote:
+    the viewer hears those words a second later anyway)."""
     reel = cfg["reel"]
     hcfg = reel.get("hooks") or {}
     templates = {**DEFAULT_TEMPLATES, **(hcfg.get("templates") or {})}
@@ -257,7 +263,11 @@ def write_hook(receipt: dict, cfg: dict, history: HookHistory | None = None,
     rng = random.Random(seed)
 
     fallback = None
-    for kind in _kinds(receipt, cfg, facts):
+    drop = set(hcfg.get("drop_kinds", ["chat"]) or [])
+    kinds = [k for k in _kinds(receipt, cfg, facts) if k not in drop]
+    if demote:
+        kinds = [k for k in kinds if k not in demote] + [k for k in kinds if k in demote]
+    for kind in kinds:
         pool = list(templates.get(kind) or [])
         rng.shuffle(pool)
         for t in pool:

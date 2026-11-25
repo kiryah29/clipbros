@@ -1,0 +1,43 @@
+# Game profile template. Copy to config/games/<game>.yaml (no leading underscore) and fill in
+# what you know; every key is optional. A channel uses it with `game: <game>` in
+# channels.yaml, or pick it on the control page. Merge order: settings.yaml < this file <
+# the channel's own overrides. Files starting with "_" are not listed as games.
+#
+# Adding a game needs no code changes:
+#   1. Copy this file.
+#   2. Fill game_name, nouns and sound_words.
+#   3. (Later, with HUD matching) cut HUD screenshots from one or two recorded streams.
+#   4. Run a few test runs and compare hooks at clipbros.app/hooklab; tune style_weights.
+
+game_name: "Valorant"           # used in hooks: "DO NOT ... in Valorant"
+aliases: ["VALORANT"]          # Twitch category names that map to this profile
+
+# Words that make a hook concrete (agents, weapons, places, characters). A hook that uses
+# one of these from the transcript or chat scores higher than a generic one.
+nouns: [spike, ace, clutch, Jett, Reyna, Vandal, Operator]
+
+# Sound event (from the sound model, AudioSet label, lower case) -> word a hook may use:
+# "Wait for the spike". Only events at or above reel.hooks.min_confidence count.
+sound_words:
+  explosion: spike
+
+# HUD events: small screenshots cut from real footage, matched in a few frames of the clip.
+# outcome fail -> "tried to ... It did not go well" and DO NOT warnings; word -> payoff hooks.
+# Matching is not built yet: list them now, they are used once it is.
+hud_events: []
+#  - name: died
+#    image: hud/valorant/death.png
+#    region: {x: 0.35, y: 0.40, w: 0.30, h: 0.20}   # fractions of the frame
+#    outcome: fail
+#    word: death
+#    min_confidence: 0.8
+hud_counters: []               # e.g. GTA 6 wanted stars: count of a small icon
+
+hooks:
+  style_weights: {stakes: 1.3} # over reel.hooks.style_weights in settings.yaml
+  extra_patterns:              # style -> patterns; slots: {streamer} {game} {action} {thing} ...
+    stakes: ["Last alive and {streamer} still went for it"]
+    # a pattern can be limited to one game moment:
+    # game: [{text: "{streamer} vs the whole team", when: {moment: clutch_round}}]
+
+moments: []                    # chat-keyword moments, see config/games/gta6.yaml

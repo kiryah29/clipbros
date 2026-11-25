@@ -73,4 +73,6 @@ def test_hook_kind_follows_trigger():
     loud = {"triggers": ["audio"], "audio_ratio": 7, "chat_ratio": 1.6, "speech": {}}
     assert hook(loud)[1] == "audio"
     chat = {"triggers": ["chat"], "audio_ratio": 1.2, "chat_ratio": 4, "speech": {}}
+    assert hook(chat)[1] == "fallback"        # chat-speed lines are off by default
+    cfg["reel"]["hooks"] = {**cfg["reel"].get("hooks", {}), "drop_kinds": []}
     assert hook(chat)[1] == "chat"
