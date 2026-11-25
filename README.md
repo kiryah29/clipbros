@@ -42,7 +42,7 @@ It prints the chat pace every 10 s and any spike it would have clipped.
    searched for a face that stays put; the webcam overlay around it becomes the top band.
    No face found means a gameplay-only reel. The receipt says which (`facecam_source`).
 3. Speech-to-text (once): `python -m clipfarm setup-speech --clip` downloads a small live
-   model (~100 MB) and the caption model (~460 MB) into `models/`. Without them, speech
+   model (~100 MB), the caption model (~460 MB) and the voice model (~40 MB) into `models/`. Without them, speech
    scores 0 and captions fall back to the live transcript; everything else still works.
    Nudity check (once, optional): `python -m clipfarm setup-nudity` fetches its model
    (~12 MB). It is also fetched on the first clip; see "Nudity check" below.
@@ -105,6 +105,24 @@ first `reel.hooks.quote_within_s` seconds (10), and a quote must be a whole sent
 . ! ? or a pause), never a fragment. Otherwise the next most specific hook is used; the old
 one is kept as `hook_live`. Re-render an older clip with the new captions: `python -m clipfarm
 render <id>`.
+
+**The streamer's own voice** (`clipfarm/voice.py`, `voice:` in `settings.yaml`). The stream
+is one mixed audio track, so cutscenes, police radio, phone calls and Discord guests land in
+the transcript too. Teach the app a streamer's voice once, from a stretch of any clip where
+only they talk (10-20 s is best; run it again on another clip to make it better):
+
+```
+python -m clipfarm voice nickmercs --file data/control/<run>/clips/nickmercs/00003_raw.mp4 --from 5 --to 17
+python -m clipfarm voice nickmercs          # show what is enrolled
+```
+
+Each caption sentence is then compared with that voiceprint (data/voices/<channel>.json):
+below `voice.min_similarity` (0.15) it is not captioned, and only lines at
+`voice.quote_min_similarity` (0.3) or more can be quoted on the hook card. The receipt lists
+what was left out (`voice.dropped`). Streamers without a voiceprint are not filtered. On
+nickmercs (GTA 6) his lines scored 0.16-0.60, police radio 0.03-0.14 and a cutscene phone
+call -0.02-0.18; a short line of his can still fall below the cut. There is no automatic
+enrolment: on a 100 s test the most frequent voice was the police dispatcher.
 
 ## ClipAgent check (`clipfarm/agent.py`)
 

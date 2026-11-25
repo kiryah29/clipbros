@@ -15,6 +15,7 @@ class Word:
     text: str
     start: float
     end: float
+    voice: float | None = None    # similarity to the streamer's voiceprint (voice.py)
 
 
 def transcribe(media: Path, engine: str) -> list[Word]:

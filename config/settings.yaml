@@ -123,6 +123,16 @@ speech:
 # (a real person) needs blur_score. The clip is HELD for a human look (status "held") only
 # when a facecam frame scores review_score or more, or when the check cannot run
 # (on_unavailable: review; set it to skip to render anyway).
+# The streamer's own voice (clipfarm/voice.py): caption lines that don't sound like the
+# streamer (cutscenes, police radio, phone calls, guests) are left out, and only lines that
+# clearly do can be quoted on the hook card. Off until a streamer is enrolled:
+#   python -m clipfarm voice <channel> --file <clip.mp4> --from <s> --to <s>
+voice:
+  enabled: true
+  model: null                 # null = models/nemo_en_titanet_small.onnx (setup-speech --clip)
+  min_similarity: 0.15        # below this a caption line is not the streamer (radio 0.03-0.14)
+  quote_min_similarity: 0.3   # hook quotes need a clear match
+
 nudity:
   enabled: true
   model: models/nudenet_320n.onnx

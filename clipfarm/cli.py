@@ -73,7 +73,8 @@ def main(argv: list[str] | None = None) -> None:
     ss.add_argument("--model", choices=["base.en", "tiny.en"], default="base.en",
                     help="base.en is more accurate; tiny.en is faster on slow PCs")
     ss.add_argument("--clip", action="store_true",
-                    help="also download the caption model (Parakeet, ~460 MB)")
+                    help="also download the caption model (Parakeet, ~460 MB) and the voice "
+                         "model (~40 MB)")
 
     sn = sub.add_parser("setup-nudity", help="download the nudity-check model and test it")
     sn.add_argument("clip", nargs="?", help="optional: scan this video and print the result")
@@ -98,6 +99,15 @@ def main(argv: list[str] | None = None) -> None:
     for name in ("approve", "reject"):
         sp = sub.add_parser(name, help=f"mark a clip {name}d")
         sp.add_argument("id", type=int)
+
+    vo = sub.add_parser("voice", help="teach the app a streamer's voice (captions skip game voices)")
+    vo.add_argument("channel")
+    vo.add_argument("--clip", type=int, help="clip id in this queue (or use --file)")
+    vo.add_argument("--file", help="any video/audio file, e.g. a control run's NNNNN_raw.mp4")
+    vo.add_argument("--from", dest="start", type=float, help="seconds into the file where only "
+                    "the streamer talks")
+    vo.add_argument("--to", dest="end", type=float)
+    vo.add_argument("--forget", action="store_true", help="delete this streamer's voiceprint")
 
     tp = sub.add_parser("tiktok-app", help="web app: connect TikTok, review a clip, post it (Content Posting API)")
     tp.add_argument("--host", default="127.0.0.1")
@@ -180,6 +190,27 @@ def main(argv: list[str] | None = None) -> None:
                 sys.exit("Caption model unavailable: pip install sherpa-onnx")
             c.transcribe_pcm(b"\x00\x00" * SAMPLE_RATE)
             print("Caption transcription ready: parakeet (reel.transcriber: clip)")
+            from .voice import VoiceID, download_voice_model
+            vpath = download_voice_model(Path(a.model_dir) if a.model_dir else None)
+            VoiceID({**settings.get("voice", {}), "model": str(vpath)})
+            print(f"voice model: {vpath} (teach a streamer's voice: clipfarm voice <channel> ...)")
+    elif a.cmd == "voice":
+        from .audio import decode_pcm
+        from .voice import VoicePrint, enrol
+        vp = VoicePrint.load(settings, a.channel)
+        if a.forget:
+            vp.path.unlink(missing_ok=True)
+            print(f"forgot {a.channel}'s voice")
+        elif a.start is None or a.end is None or not (a.clip or a.file):
+            print(f"{a.channel}: " + (f"voiceprint from {vp.seconds:.0f} s in {len(vp.takes)} take(s)"
+                                      if vp.embedding else "no voiceprint yet"))
+            print("add one: clipfarm voice <channel> --file <clip.mp4> --from <s> --to <s>")
+        else:
+            src = Path(a.file) if a.file else Path(q().get(a.clip).raw_path)
+            vp = enrol(settings, a.channel, decode_pcm(src), a.start, a.end,
+                       note=f"{src.name} {a.start:g}-{a.end:g}s")
+            print(f"{a.channel}: voiceprint from {vp.seconds:.0f} s in {len(vp.takes)} take(s) "
+                  f"-> {vp.path}")
     elif a.cmd == "setup-nudity":
         from . import nudity
         cfg = nudity.settings(settings.get("nudity"))

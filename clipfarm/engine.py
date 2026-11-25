@@ -6,6 +6,7 @@ import json
 import random
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from .chat import make_chat_source
@@ -29,6 +30,7 @@ from .scheduler import in_window
 from .signals import score_signals, strength
 from .speech import (TOKEN_RE, SpeechTracker, find_phrases, make_clip_transcriber,
                      make_transcriber, phrase_list)
+from .voice import VoiceID, VoicePrint, sentences, streamer_only, tag_voices
 
 NO_VIDEO_TIMEOUT_S = 45     # no buffered video this long after (re)starting = recorder is stuck
 RECORDER_RETRIES = 2        # restarts before a run gives up on the stream
@@ -248,6 +250,43 @@ def clip_words(raw: Path, cfg: dict, lead: float) -> list[Word] | None:
             if w.start >= lead]
 
 
+_voice_ids: dict = {}
+
+
+def voice_id(vcfg: dict) -> VoiceID | None:
+    key = str(vcfg.get("model") or "")
+    if key not in _voice_ids:
+        try:
+            _voice_ids[key] = VoiceID(vcfg)
+        except Exception as e:
+            print(f"  ! voice check is off ({e})")
+            _voice_ids[key] = None
+    return _voice_ids[key]
+
+
+def keep_streamer(words: list[Word], channel: str, cfg: dict, raw: Path, lead: float,
+                  pcm: bytes | None = None) -> tuple[list[Word], dict | None, bytes | None]:
+    """Caption words minus the lines that are not the streamer's voice (game characters,
+    radio, guests), if the streamer has a voiceprint. Returns (words, receipt entry, pcm)."""
+    vcfg = cfg.get("voice") or {}
+    if not words or not vcfg.get("enabled", True):
+        return words, None, pcm
+    vp = VoicePrint.load(cfg, channel)
+    if not vp.embedding:
+        return words, {"enrolled": False}, pcm
+    vid = voice_id(vcfg)
+    if vid is None:
+        return words, {"enrolled": True, "checked": False}, pcm
+    pcm = pcm if pcm is not None else decode_pcm(raw)
+    tagged = tag_voices(words, pcm, lead, vid, vp.embedding)
+    min_sim = float(vcfg.get("min_similarity", 0.15))
+    kept = streamer_only(tagged, min_sim)
+    dropped = [[" ".join(w.text for w in s), s[0].voice] for s in sentences(tagged)
+               if s[0].voice is not None and s[0].voice < min_sim]
+    return kept, {"enrolled": True, "checked": True, "min_similarity": min_sim,
+                  "dropped": dropped}, pcm
+
+
 def refresh_hook(receipt: dict, cfg: dict, words: list[Word], seed: int | None = None
                  ) -> tuple[str | None, str | None]:
     """A phrase or quote hook checked again against the clip's own transcript (times from
@@ -259,6 +298,8 @@ def refresh_hook(receipt: dict, cfg: dict, words: list[Word], seed: int | None =
     if kind not in ("phrase", "quote") or not words:
         return receipt.get("hook"), kind
     within = float((cfg["reel"].get("hooks") or {}).get("quote_within_s", 10))
+    qmin = float((cfg.get("voice") or {}).get("quote_min_similarity", 0.3))
+    words = [w for w in words if w.voice is None or w.voice >= qmin]   # only the streamer
     sp = cfg.get("speech") or {}
     toks = [t for w in words if 0 <= w.start <= within for t in TOKEN_RE.findall(w.text.lower())]
     phrases = find_phrases(toks, phrase_list(sp.get("keywords")), int(sp.get("repeat_words", 3)))
@@ -306,17 +347,22 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
         words = drop_sound_tags(words)
         if words and (box := cfg["reel"].get("subtitle_box")):   # game's own dialogue
             words = drop_dialogue(words, [t - lead for t in subtitle_times(raw, box)])
+        words, voice, pcm = keep_streamer(words, clip.channel, cfg, raw, lead)
+        if voice and voice.get("dropped"):
+            print(f"  clip {clip_id}: {len(voice['dropped'])} line(s) not in "
+                  f"{clip.channel}'s voice left out of the captions")
         # re-time the clip around the loudest 250 ms (chat reacts seconds after the moment)
         shift, length, anchor = 0.0, None, None
         if (cfg["clip"].get("anchor") or {}).get("enabled", True):
-            a = anchor_on_peak(window_levels(decode_pcm(raw)), 0.25, lead, cfg["clip"],
+            a = anchor_on_peak(window_levels(pcm if pcm is not None else decode_pcm(raw)),
+                               0.25, lead, cfg["clip"],
                                [(w.start + lead, w.end + lead) for w in words or []])
             if a:
                 shift, length = a[0] - lead, a[1] - a[0]
                 anchor = {"shift_s": round(shift, 2), "length_s": round(length, 2),
                           "peak_s": round(a[2] - a[0], 2)}
         lead += shift
-        words = [Word(w.text, w.start - shift, w.end - shift) for w in words or []]
+        words = [replace(w, start=w.start - shift, end=w.end - shift) for w in words or []]
         words = [w for w in words if w.end > 0 and (length is None or w.start < length)]
         chat = [[m[0] - shift, *m[1:]] for m in clip.receipt.get("chat") or []]
         reel_cfg = cfg["reel"]
@@ -328,9 +374,9 @@ def _craft_clip(queue: ClipQueue, clip_id: int, cfg: dict, facecam: dict | None,
         safety = nudity_check(raw, cfg.get("nudity"), start=lead, facecam=facecam,
                               full_cam=full_cam)
         receipt = {**queue.get(clip_id).receipt, "nudity": safety, "anchor": anchor,
-                   "caption_source": cap_source}
+                   "caption_source": cap_source, "voice": voice}
         if cap_source == "clip":
-            receipt["caption_transcript"] = [[w.text, round(w.start, 2), round(w.end, 2)]
+            receipt["caption_transcript"] = [[w.text, round(w.start, 2), round(w.end, 2), w.voice]
                                              for w in words]
             hook, kind = refresh_hook(receipt, cfg, words)
             if hook != receipt.get("hook"):
