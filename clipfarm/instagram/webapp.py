@@ -51,15 +51,9 @@ class InstagramPages:
         t = self.store.load()
         if not t:
             return None
-        if t.expired:
+        if t.expired or not t.user_id:           # no user_id: a token from the old Instagram Login
             self.store.clear()
             return None
-        if t.due_for_refresh:
-            try:
-                t = await self.client().refresh(t)
-                self.store.save(t)
-            except InstagramError:
-                pass                             # still valid for a while; try again next time
         return t
 
     def not_set_up(self) -> web.Response:
@@ -75,7 +69,7 @@ class InstagramPages:
         tok = await self.token()
         if not tok:
             return self.page("Instagram", "<div class='card'><p>Connect your Instagram professional "
-                             "account to post reels.</p><a class='btn' href='/instagram/login'>Connect "
+                             "account (through the Facebook Page it is linked to) to post reels.</p><a class='btn' href='/instagram/login'>Connect "
                              "Instagram</a></div>")
         try:
             me = await self.client().me(tok)
@@ -85,7 +79,7 @@ class InstagramPages:
         return self.page("Instagram", (
             f"<div class='card row'><img class='av' src='{e(me.get('profile_picture_url', ''))}' alt=''>"
             f"<div><b>@{e(me.get('username', ''))}</b><br><span class='mut'>Instagram connected"
-            f" &middot; token valid until {time.strftime('%d %b %Y', time.localtime(tok.expires_at))}</span></div>"
+            f" &middot; login valid until {time.strftime('%d %b %Y', time.localtime(tok.expires_at))}</span></div>"
             "<form method='post' action='/instagram/logout' style='margin-left:auto'>"
             "<button class='ghost'>Disconnect</button></form></div>"
             "<p>Post reels from <a href='/clips'>Clips</a>.</p>"))
@@ -166,10 +160,7 @@ c.addEventListener('change',()=>{{g.disabled=!c.checked;}});</script>"""
         form = await request.post()
         if "consent" not in form:
             return self.page("Not posted", "<p class='err'>Tick the box to confirm you reviewed the clip.</p>")
-        try:
-            ig_id = str((await self.client().me(tok)).get("user_id") or "me")
-        except InstagramError as ex:
-            return self.page("Not posted", f"<p class='err'>{e(str(ex))}</p>")
+        ig_id = tok.user_id
         link = secrets.token_urlsafe(24)
         self.media[link] = (path, time.time() + MEDIA_TTL_S)
         url = f"{self.cfg.public_base}/ig/media/{link}.mp4"

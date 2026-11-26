@@ -342,27 +342,39 @@ from test runs" (newest run first, rejected and posted ones left out), and `/cli
 default caption. After a post the clip's status is `posted`. Posting is behind the shared
 control password: anyone who has it can post to the connected account.
 
-## Post to Instagram (Instagram API with Instagram Login)
+## Post to Instagram (Instagram API with Facebook Login)
 
 Same app, same review flow: `/clips` shows **Post to Instagram** next to Post to TikTok
-(when `CONTROL_ALLOW_POSTING=1`). Reels go out **public right away**: for your own
-professional account Meta's Standard Access is enough, no app review.
+(when `CONTROL_ALLOW_POSTING=1`). Login goes through Facebook: the Instagram account is
+found through the Facebook Page it is linked to. While the Meta app is in development mode,
+only people with a role on the app can connect, and no app review is needed for them.
 
-1. Make the Instagram account a **creator or business** account (Instagram app, Settings,
-   Account type and tools).
-2. In developers.facebook.com create an app, add the **Instagram** product and open
-   **API setup with Instagram login**. Add your Instagram account under Roles (Instagram
-   testers) and accept the invite in Instagram (Settings, Website permissions, Tester invites).
-3. Under Business login settings add the OAuth redirect URI
-   `https://clipbros.app/callback/instagram`.
-4. Put `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET` (the Instagram ones from that page) and
-   `INSTAGRAM_REDIRECT_URI` in `.env`, restart the app, open `/instagram` and connect.
+1. Make the Instagram account a **Business or Creator** account and link it to a Facebook
+   Page you manage (Instagram app, Settings, Account type and tools; or the Page's settings,
+   Linked accounts).
+2. In developers.facebook.com open the app (Facebook Login for Business / Facebook Login
+   product). Under App roles, Roles, give the Facebook user who manages that Page a role
+   (Administrator, Developer or Tester) and have them accept the invite.
+3. Facebook Login settings, **Valid OAuth Redirect URIs**: add exactly
+   `https://clipbros.app/callback/instagram`. Keep "Client OAuth login" and "Web OAuth
+   login" on.
+4. Put the **Meta App ID** and **App secret** (App settings, Basic) in `.env` as
+   `INSTAGRAM_APP_ID` and `INSTAGRAM_APP_SECRET`, plus `INSTAGRAM_REDIRECT_URI`, restart
+   the app, open `/instagram` and connect. When Facebook asks which Pages and Instagram
+   accounts to share, tick the Page and the Instagram account.
+
+The app asks for `instagram_basic`, `instagram_content_publish`, `pages_show_list`,
+`pages_read_engagement` and `business_management`, swaps the code for a long-lived user
+token on the server, then reads `/me/accounts` and each Page's
+`instagram_business_account` and Page access token. It keeps the first Page that has an
+Instagram account and posts with that Page token. Reconnect when the page says the login
+has expired (about 60 days).
 
 Meta downloads the video itself, so while a reel is posted the app serves it at a random,
 public link (`/ig/media/<token>.mp4`) that expires after 2 hours or as soon as the reel is
 published. The status page publishes the reel once Instagram has processed it and saves the
-link in the clip's receipt (`posted_to.instagram`). The token (60 days, refreshed when a
-week is left) is in `data/instagram_token.json` (gitignored).
+link in the clip's receipt (`posted_to.instagram`). The Page token and Instagram account id
+are in `data/instagram_token.json` (gitignored).
 
 ## Control page (test runs from another computer)
 

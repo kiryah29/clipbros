@@ -17,37 +17,47 @@ TT = tt.Config("ck", "cs", "https://clipbros.test/callback")
 IG = ig.Config("app", "secret", "https://clipbros.test/callback/instagram")
 
 
-def fake_graph(calls):
-    async def token(req):
-        calls["code_form"] = dict(await req.post())
-        return web.json_response({"access_token": "short", "user_id": 42, "permissions": []})
+def fake_graph(calls, pages=({"id": "p1"}, {"id": "p2"})):
+    async def oauth(req):
+        q = dict(req.query)
+        if q.get("grant_type") == "fb_exchange_token":
+            calls["exchange"] = q
+            return web.json_response({"access_token": "long", "token_type": "bearer"})
+        calls["code"] = q
+        return web.json_response({"access_token": "short", "token_type": "bearer", "expires_in": 5000})
 
-    async def exchange(req):
-        calls["exchange"] = dict(req.query)
-        return web.json_response({"access_token": "long", "token_type": "bearer", "expires_in": 5183944})
+    async def accounts(req):
+        return web.json_response({"data": list(pages)})
 
-    async def me(req):
-        return web.json_response({"user_id": "1784", "username": "clipbros", "profile_picture_url": ""})
+    async def node(req):
+        i = req.match_info["id"]
+        if i == "p1":                            # a Page without an Instagram account
+            return web.json_response({"id": "p1", "access_token": "pt1"})
+        if i == "p2":
+            calls["page_token_with"] = req.query["access_token"]
+            return web.json_response({"id": "p2", "access_token": "page-token",
+                                      "instagram_business_account": {"id": "1784"}})
+        if i == "1784":
+            calls["me_token"] = req.query["access_token"]
+            return web.json_response({"id": "1784", "username": "clipbros.cb", "profile_picture_url": ""})
+        if i == "c1":
+            calls["polls"] = calls.get("polls", 0) + 1
+            return web.json_response({"status_code": "FINISHED" if calls["polls"] > 1 else "IN_PROGRESS"})
+        return web.json_response({"permalink": "https://www.instagram.com/reel/abc/"})
 
     async def media(req):
         calls["media"] = dict(await req.post())
         return web.json_response({"id": "c1"})
-
-    async def container(req):
-        if req.match_info["id"] == "c1":
-            calls["polls"] = calls.get("polls", 0) + 1
-            return web.json_response({"status_code": "FINISHED" if calls["polls"] > 1 else "IN_PROGRESS"})
-        return web.json_response({"permalink": "https://www.instagram.com/reel/abc/"})
 
     async def publish(req):
         calls.setdefault("publish", []).append(dict(await req.post()))
         return web.json_response({"id": "m1"})
 
     app = web.Application()
-    app.add_routes([web.post("/oauth/access_token", token), web.get("/access_token", exchange),
-                    web.get(f"/{ig.VERSION}/me", me), web.post(f"/{ig.VERSION}/{{ig}}/media", media),
-                    web.post(f"/{ig.VERSION}/{{ig}}/media_publish", publish),
-                    web.get(f"/{ig.VERSION}/{{id}}", container)])
+    v = ig.VERSION
+    app.add_routes([web.get(f"/{v}/oauth/access_token", oauth), web.get(f"/{v}/me/accounts", accounts),
+                    web.post(f"/{v}/{{ig}}/media", media), web.post(f"/{v}/{{ig}}/media_publish", publish),
+                    web.get(f"/{v}/{{id}}", node)])
     return app
 
 
@@ -78,7 +88,6 @@ def test_connect_review_and_post_a_reel(tmp_path, monkeypatch):
         await gs.start()
         gbase = f"http://127.0.0.1:{gs._server.sockets[0].getsockname()[1]}"
         monkeypatch.setattr(ig, "GRAPH", gbase)
-        monkeypatch.setattr(ig, "TOKEN_URL", gbase + "/oauth/access_token")
         app = build_app(TT, tmp_path / "q.db", tmp_path / "tiktok_token.json",
                         password_hash=hash_password("pw", 1000), allow_posting=True,
                         control_dir=tmp_path / "control", ig_cfg=IG)
@@ -95,7 +104,9 @@ def test_connect_review_and_post_a_reel(tmp_path, monkeypatch):
             await c.post(base + "/signin", data={"password": "pw"})
             login = await c.get(base + "/instagram/login", allow_redirects=False)
             q = parse_qs(urlparse(login.headers["Location"]).query)
+            out["auth"] = login.headers["Location"].split("?")[0]
             out["scope"] = q["scope"][0]
+            out["bad_state"] = await (await c.get(f"{base}/callback/instagram?code=abc&state=nope")).text()
             await c.get(f"{base}/callback/instagram?code=abc%23_&state={q['state'][0]}")
             out["account"] = await (await c.get(base + "/instagram")).text()
             out["clips"] = await (await c.get(base + "/clips")).text()
@@ -118,10 +129,15 @@ def test_connect_review_and_post_a_reel(tmp_path, monkeypatch):
 
     out = asyncio.run(run())
     assert out["anon_review"] == 302
-    assert out["scope"] == "instagram_business_basic,instagram_business_content_publish"
-    assert calls["code_form"]["code"] == "abc"                  # Instagram's "#_" suffix stripped
-    assert calls["exchange"]["grant_type"] == "ig_exchange_token"
-    assert "@clipbros" in out["account"]
+    assert out["auth"] == "https://www.facebook.com/dialog/oauth"
+    assert out["scope"] == ("instagram_basic,instagram_content_publish,pages_show_list,"
+                            "pages_read_engagement,business_management")
+    assert "Invalid login state" in out["bad_state"] and "exchange" in calls   # only the good state got through
+    assert calls["code"]["code"] == "abc" and calls["code"]["client_secret"] == "secret"
+    assert calls["code"]["redirect_uri"] == "https://clipbros.test/callback/instagram"
+    assert calls["exchange"]["fb_exchange_token"] == "short" and calls["page_token_with"] == "long"
+    assert "@clipbros.cb" in out["account"] and calls["me_token"] == "page-token"
+    assert calls["media"]["access_token"] == "page-token"
     assert f"/runs/{rid}/clip/{cid}/instagram'>Post to Instagram" in out["clips"]
     assert "Nick: &quot;DUDE DUDE DUDE&quot;" in out["review"] and "name='consent'" in out["review"]
     assert "Not posted" in out["no_consent"] and "processing" in out["posting"]
@@ -162,7 +178,26 @@ def test_posting_off_means_no_instagram_pages(tmp_path):
     assert not any("instagram" in p or "/ig/" in p for p in paths)
 
 
-def test_token_refresh_rules():
-    old = ig.Token({"access_token": "a", "expires_in": 3 * 86400, "issued_at": time.time() - 50 * 86400})
-    new = ig.Token({"access_token": "a", "expires_in": 3 * 86400})
-    assert old.due_for_refresh and not new.due_for_refresh and not old.expired
+def test_no_page_with_instagram_gives_a_clear_error(tmp_path, monkeypatch):
+    async def run():
+        g = web.AppRunner(fake_graph({}, pages=({"id": "p1"},)))
+        await g.setup()
+        gs = web.TCPSite(g, "127.0.0.1", 0)
+        await gs.start()
+        monkeypatch.setattr(ig, "GRAPH", f"http://127.0.0.1:{gs._server.sockets[0].getsockname()[1]}")
+        async with aiohttp.ClientSession() as http:
+            try:
+                await ig.InstagramClient(IG, http).exchange_code("abc")
+            except ig.InstagramError as ex:
+                return str(ex)
+            finally:
+                await g.cleanup()
+
+    assert "No Facebook Page linked to an Instagram" in asyncio.run(run())
+
+
+def test_graph_errors_are_readable():
+    try:
+        ig._check({"error": {"message": "Invalid OAuth access token.", "code": 190}})
+    except ig.InstagramError as ex:
+        assert "Invalid OAuth access token." in str(ex) and "190" in str(ex)
