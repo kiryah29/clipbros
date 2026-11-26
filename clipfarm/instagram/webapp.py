@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from aiohttp import web
 
-from .api import Config, InstagramClient, InstagramError, Token, TokenStore, authorize_url
+from .api import Config, InstagramClient, InstagramError, Token, TokenStore, authorize_url, public_base
 
 e = html.escape
 DEFAULT_CAPTION = "Clip from {channel} #gaming #streamer #clips #reels"
@@ -35,14 +35,19 @@ class InstagramPages:
     def __init__(self, cfg: Config | None, store: TokenStore, runs, page, http_getter):
         self.cfg, self.store, self.runs, self.page = cfg, store, runs, page
         self.http = http_getter                 # the app's aiohttp session (made at startup)
-        self.states: set[str] = set()
+        self.states: dict[str, str] = {}       # OAuth state -> the redirect_uri the login used
         self.media: dict[str, tuple[Path, float]] = {}
         self.pending: dict[str, dict] = {}      # container id -> what to publish and mark
         self.locks: dict[str, asyncio.Lock] = {}
 
     @property
-    def redirect_path(self) -> str:
-        return urlparse(self.cfg.redirect_uri).path if self.cfg else "/callback/instagram"
+    def redirect_paths(self) -> list[str]:
+        if not self.cfg:
+            return ["/callback/instagram"]
+        return list(dict.fromkeys(urlparse(u).path for u in self.cfg.redirect_uris))
+
+    def redirect_for(self, request: web.Request) -> str:
+        return self.cfg.redirect_for(request.headers.get("X-Forwarded-Host") or request.host)
 
     def client(self) -> InstagramClient:
         return InstagramClient(self.cfg, self.http())
@@ -59,7 +64,7 @@ class InstagramPages:
     def not_set_up(self) -> web.Response:
         return self.page("Instagram", (
             "<div class='card'><p>Instagram is not set up yet. Put <code>INSTAGRAM_APP_ID</code>, "
-            "<code>INSTAGRAM_APP_SECRET</code> and <code>INSTAGRAM_REDIRECT_URI</code> in <code>.env</code> "
+            "<code>INSTAGRAM_APP_SECRET</code> and <code>INSTAGRAM_REDIRECT_URIS</code> in <code>.env</code> "
             "and restart the app (see README, 'Post to Instagram').</p></div>"))
 
     # -- account --------------------------------------------------------------------
@@ -87,9 +92,9 @@ class InstagramPages:
     async def login(self, request: web.Request) -> web.Response:
         if not self.cfg:
             return self.not_set_up()
-        state = secrets.token_urlsafe(16)
-        self.states.add(state)
-        raise web.HTTPFound(authorize_url(self.cfg, state))
+        state, redirect = secrets.token_urlsafe(16), self.redirect_for(request)
+        self.states[state] = redirect
+        raise web.HTTPFound(authorize_url(self.cfg, state, redirect))
 
     async def callback(self, request: web.Request) -> web.Response:
         if not self.cfg:
@@ -101,9 +106,9 @@ class InstagramPages:
         if q.get("state", "") not in self.states:
             return self.page("Login failed", "<p class='err'>Invalid login state. Start again from "
                              "<a href='/instagram'>Instagram</a>.</p>")
-        self.states.discard(q["state"])
+        redirect = self.states.pop(q["state"])
         try:
-            self.store.save(await self.client().exchange_code(q.get("code", "")))
+            self.store.save(await self.client().exchange_code(q.get("code", ""), redirect))
         except (InstagramError, KeyError) as ex:
             return self.page("Login failed", f"<p class='err'>{e(str(ex))}</p>")
         raise web.HTTPFound("/instagram")
@@ -163,7 +168,7 @@ c.addEventListener('change',()=>{{g.disabled=!c.checked;}});</script>"""
         ig_id = tok.user_id
         link = secrets.token_urlsafe(24)
         self.media[link] = (path, time.time() + MEDIA_TTL_S)
-        url = f"{self.cfg.public_base}/ig/media/{link}.mp4"
+        url = f"{public_base(self.redirect_for(request))}/ig/media/{link}.mp4"
         try:
             container = await self.client().create_reel(
                 tok, ig_id, url, str(form.get("caption", "")), "share_to_feed" in form)
@@ -224,7 +229,8 @@ async function poll(){{const r=await fetch('/instagram/status/{e(container)}');c
         clip = "/runs/{rid}/clip/{cid:\\d+}/instagram"
         return [
             web.get("/instagram", self.index), web.get("/instagram/login", self.login),
-            web.post("/instagram/logout", self.logout), web.get(self.redirect_path, self.callback),
+            web.post("/instagram/logout", self.logout),
+            *(web.get(p, self.callback) for p in self.redirect_paths),
             web.get(clip, self.review), web.post(clip + "/post", self.post),
             web.get("/instagram/status/{container}", self.status),
             web.get("/ig/media/{link:[A-Za-z0-9_-]{24,}}.mp4", self.media_file),
