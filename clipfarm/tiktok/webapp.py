@@ -143,7 +143,7 @@ class App:
         out = []
         for r in sorted(self.runs.runs.values(), key=lambda r: r["created"], reverse=True):
             out += [(r, c) for c in self.runs.clips(r["id"])
-                    if c.reel_path and c.status not in ("rejected", "posted")]
+                    if c.reel_path and c.status not in ("rejected", "rejectd", "posted")]
         return out
 
     # -- pages ----------------------------------------------------------------------

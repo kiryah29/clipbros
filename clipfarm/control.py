@@ -26,6 +26,8 @@ from typing import Callable
 from aiohttp import web
 
 from .config import ROOT, load_channels
+from .feedback import FILE as FEEDBACK_FILE, FeedbackStore
+from .feedback_web import ReviewPages
 from .queue import ClipQueue
 from .streamers import FILE as STREAMERS_FILE, StreamerRegistry
 
@@ -144,6 +146,8 @@ class RunManager:
         self.root, self.keep_s, self.cmd, self.max_running = root, keep_days * 86400, cmd, max_running
         # kept next to the run folders' parent (data/streamers.json), so it outlives cleanup
         self.streamers = streamers or StreamerRegistry(root.parent / STREAMERS_FILE)
+        # one review store for all runs, next to data/control/, so run cleanup never deletes it
+        self.feedback = FeedbackStore(root.parent / FEEDBACK_FILE)
         root.mkdir(parents=True, exist_ok=True)
         self.runs: dict[str, dict] = {}
         self.procs: dict[str, asyncio.subprocess.Process] = {}
@@ -324,7 +328,10 @@ class RunManager:
 
 
 # --------------------------------------------------------------------------- pages
-class ControlPages:
+class ControlPages(ReviewPages):
+    """The /clips review page, approve/reject and the review API come from ReviewPages
+    (feedback_web.py)."""
+
     def __init__(self, runs: RunManager, sessions: Sessions, password_hash: str | None, page,
                  posting: bool = False):
         self.runs, self.sessions, self.hash, self.page = runs, sessions, password_hash, page
@@ -444,48 +451,6 @@ class ControlPages:
         await self.runs.stop(self._rid(request))
         raise web.HTTPFound("/control")
 
-    async def clips(self, request: web.Request) -> web.Response:
-        only = request.query.get("run")
-        runs = sorted(self.runs.runs.values(), key=lambda r: r["created"], reverse=True)
-        out = []
-        for r in runs:
-            if only and r["id"] != only:
-                continue
-            clips = [c for c in self.runs.clips(r["id"]) if c.reel_path]
-            if not clips:
-                continue
-            when = time.strftime("%d %b %H:%M", time.localtime(r["started"] or r["created"]))
-            out.append(f"<h2>{e(r['channel'])} <span class='mut'>{when} &middot; {e(r['status'])}</span></h2>")
-            for c in clips:
-                url = f"/runs/{r['id']}/clip/{c.id}"
-                rc = c.receipt
-                sig = ", ".join(f"{e(k)} {v:.2f}" for k, v in (rc.get("signals") or {}).items()
-                                if isinstance(v, (int, float)))
-                nd = rc.get("nudity") or {}
-                safety = (f"<br><span class='err'>HELD, check before posting: {e(str(nd.get('why', '')))}</span>"
-                          if c.status == "held" else
-                          f"<br><span class='mut'>nudity check: {e(str(nd.get('why', '')))}</span>"
-                          if nd.get("ranges") else "")
-                out.append(
-                    f"<div class='card'><video controls playsinline preload='none' src='{url}.mp4'></video>"
-                    f"<p><b>Clip #{c.id}</b> &middot; score {c.score:.1f} &middot; <b>{e(c.status)}</b><br>"
-                    f"<span class='mut'>{e(str(rc.get('why', '')))}</span><br>"
-                    f"<span class='mut'>triggers: {e(', '.join(rc.get('triggers', [])))} &middot; "
-                    f"hook: {e(str(rc.get('hook', '')))}</span><br><span class='mut'>signals: {sig}</span>{safety}</p>"
-                    f"<div class='row'><a class='btn ghost' href='{url}.mp4?dl=1'>Download</a>"
-                    + (f"<a class='btn' href='{url}/tiktok'>Post to TikTok</a>"
-                       if self.posting and c.status not in ("rejected", "posted") else "")
-                    + (f"<a class='btn' href='{url}/instagram'>Post to Instagram</a>"
-                       if self.posting and c.status != "rejected"
-                       and "instagram" not in (rc.get("posted_to") or {}) else "")
-                    + (f"<a class='btn ghost' href='{e(rc['posted_to']['instagram'])}' target='_blank' "
-                       f"rel='noopener'>On Instagram</a>"
-                       if (rc.get("posted_to") or {}).get("instagram", "").startswith("https://") else "") +
-                    f"<form method='post' action='{url}/approve'><button>Approve</button></form>"
-                    f"<form method='post' action='{url}/reject'><button class='ghost'>Reject</button></form></div></div>")
-        body = "".join(out) or "<p class='mut'>No finished clips yet.</p>"
-        return self.page("Clips", "<p><a href='/control'>&larr; Control</a></p>" + body)
-
     async def video(self, request: web.Request) -> web.StreamResponse:
         rid = self._rid(request)
         cid = int(request.match_info["cid"])
@@ -496,12 +461,6 @@ class ControlPages:
                    if request.query.get("dl") else None)
         return web.FileResponse(p, headers=headers)
 
-    async def mark(self, request: web.Request) -> web.Response:
-        rid = self._rid(request)
-        action = request.match_info["action"]
-        self.runs.set_status(rid, int(request.match_info["cid"]), action + "d")
-        raise web.HTTPFound(f"/clips?run={rid}")
-
     def routes(self) -> list:
         clip = "/runs/{rid}/clip/{cid:\\d+}"
         return [
@@ -511,4 +470,5 @@ class ControlPages:
             web.post("/control/start", self.start), web.post("/control/runs/{rid}/stop", self.stop),
             web.get("/clips", self.clips), web.get(clip + ".mp4", self.video),
             web.post(clip + "/{action:approve|reject}", self.mark),
+            *self.review_routes(),
         ]

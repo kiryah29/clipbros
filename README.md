@@ -276,6 +276,25 @@ carries an AGPL-3.0 licence file, so the model is downloaded, not committed.
 `queue` → watch the reel → `approve <id>` or `reject <id>`. Publishing is deliberately
 left manual. Plug in an uploader when you're ready.
 
+### Review feedback (learning loop, phase 0)
+
+Every review is saved for learning in `data/feedback.db` (`clipfarm/feedback.py`): the decision,
+why, who, how long they watched, and a snapshot of the clip's receipt (signals, clip type, moment,
+hook). It sits outside `data/control/`, so the run cleanup never deletes it.
+
+- `/clips`: fill in your name once, watch, then **Approve**, **Top clip** or **Reject…** with one or
+  more reasons (boring, needs context, starts too late, too long, bad hook, bad captions,
+  duplicate, unsafe). Scores stay hidden until someone has decided; **Show scores** turns that off.
+- CLI: `python -m clipfarm reject 12 --reason boring --reason bad_hook` (`--star` on approve for a top clip).
+- `python -m clipfarm feedback stats` approval rates by clip type, channel and reviewer, plus reject reasons.
+- `python -m clipfarm feedback export [--days 30]` CSV with a label per review; also at `/api/feedback/export.csv`.
+- `python -m clipfarm feedback backfill` once: saves old approves/rejects still on disk and fixes the
+  old `rejectd` status (rejects used to be saved as `action + "d"`).
+- API: `POST /api/runs/<run>/clip/<id>/review` with `{"decision": "approve"|"reject", "star", "reasons", "note", "reviewer"}`.
+
+Only reasons about the moment itself (boring, needs context) count against a clip's selection;
+window, hook and caption reasons are kept apart for those stages.
+
 ## Project layout
 
 ```

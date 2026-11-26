@@ -5,11 +5,13 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from .config import ROOT, channel_settings, load_channels, load_settings
 from .agent import candidate_json
 from .engine import craft_clip, run_demo, run_live
+from .feedback import REASON_CODES
 from .queue import ClipQueue
 
 
@@ -97,8 +99,18 @@ def main(argv: list[str] | None = None) -> None:
     rr.add_argument("id", type=int)
 
     for name in ("approve", "reject"):
-        sp = sub.add_parser(name, help=f"mark a clip {name}d")
+        sp = sub.add_parser(name, help=f"mark a clip {name}d and save the review for learning")
         sp.add_argument("id", type=int)
+        sp.add_argument("--reason", action="append", default=[], choices=sorted(REASON_CODES),
+                        help="why it was rejected (repeat for more than one)")
+        sp.add_argument("--star", action="store_true", help="approve as a top clip")
+        sp.add_argument("--note", default=None)
+        sp.add_argument("--reviewer", default=None, help="defaults to CLIPBROS_REVIEWER or your login name")
+
+    fb = sub.add_parser("feedback", help="review data for the learning loop: stats, export, backfill")
+    fb.add_argument("action", choices=["stats", "export", "backfill"])
+    fb.add_argument("--days", type=float, default=None, help="only the last N days")
+    fb.add_argument("--out", default=None, help="export: CSV path (default <data>/feedback_export.csv)")
 
     vo = sub.add_parser("voice", help="teach the app a streamer's voice (captions skip game voices)")
     vo.add_argument("channel")
@@ -257,8 +269,38 @@ def main(argv: list[str] | None = None) -> None:
         craft_clip(queue, a.id, channel_settings(settings, ch), ch.get("facecam"))
         print(queue.get(a.id).reel_path)
     elif a.cmd in ("approve", "reject"):
-        q().update(a.id, status=a.cmd + "d")
-        print(f"clip {a.id} {a.cmd}d")
+        from .feedback import FILE as FB_FILE, STATUS_OF, FeedbackStore, clip_uid, parse_review
+        queue = q()
+        c = queue.get(a.id)
+        if not c:
+            sys.exit(f"clip {a.id} not found")
+        reviewer = a.reviewer or os.getenv("CLIPBROS_REVIEWER") or os.getenv("USERNAME") or "cli"
+        review = parse_review(a.cmd, {"reasons": a.reason, "star": a.star, "note": a.note,
+                                      "reviewer": reviewer})
+        FeedbackStore(data_dir / FB_FILE).record(clip_uid(c.channel, None, c.id), review, c)
+        queue.update(a.id, status=STATUS_OF[a.cmd])
+        why = f" ({', '.join(review['reasons'])})" if review["reasons"] else ""
+        print(f"clip {a.id} {STATUS_OF[a.cmd]}{why}")
+    elif a.cmd == "feedback":
+        from .feedback import FILE as FB_FILE, FeedbackStore, backfill, print_stats
+        store = FeedbackStore(data_dir / FB_FILE)
+        since = time.time() - a.days * 86400 if a.days else None
+        if a.action == "stats":
+            print_stats(store.stats(since))
+        elif a.action == "export":
+            out = Path(a.out) if a.out else data_dir / "feedback_export.csv"
+            text = store.export_csv(since)
+            out.write_text(text, encoding="utf-8")
+            print(f"{max(0, text.count(chr(10)) - 1)} reviews -> {out}")
+        else:
+            def game_of(rid):
+                try:
+                    return json.loads((data_dir / "control" / rid / "run.json").read_text()).get("game") or None
+                except (OSError, ValueError, TypeError):
+                    return None
+            queues = [(None, data_dir / "queue.db")] + [
+                (p.parent.name, p) for p in sorted((data_dir / "control").glob("*/queue.db"))]
+            print(f"backfilled {backfill(store, queues, game_of)} reviews (old 'rejectd' statuses fixed)")
 
 
 if __name__ == "__main__":
