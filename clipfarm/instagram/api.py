@@ -39,27 +39,32 @@ class InstagramError(RuntimeError):
 class Config:
     app_id: str
     app_secret: str
-    redirect_uri: str
+    redirect_uris: tuple[str, ...]          # the first one is the default
 
     @classmethod
     def from_env(cls) -> "Config | None":
         """None when Instagram is not set up (the app still runs, the page says what's missing)."""
-        vals = {k: os.getenv(k, "") for k in
-                ("INSTAGRAM_APP_ID", "INSTAGRAM_APP_SECRET", "INSTAGRAM_REDIRECT_URI")}
-        if not all(vals.values()):
+        app_id, secret = os.getenv("INSTAGRAM_APP_ID", ""), os.getenv("INSTAGRAM_APP_SECRET", "")
+        uris = tuple(u.strip() for u in os.getenv("INSTAGRAM_REDIRECT_URIS", "").split(",") if u.strip())
+        if not (app_id and secret and uris):
             return None
-        return cls(vals["INSTAGRAM_APP_ID"], vals["INSTAGRAM_APP_SECRET"], vals["INSTAGRAM_REDIRECT_URI"])
+        return cls(app_id, secret, uris)
 
-    @property
-    def public_base(self) -> str:
-        """https://clipbros.app: where Meta can fetch a reel from (same host as the redirect)."""
-        u = urlparse(self.redirect_uri)
-        return f"{u.scheme}://{u.netloc}"
+    def redirect_for(self, host: str) -> str:
+        """The listed redirect URI whose host is `host`, else the first. Never a value from the request."""
+        host = host.split(",")[0].strip().lower().rsplit(":", 1)[0] if host else ""
+        return next((u for u in self.redirect_uris if urlparse(u).hostname == host), self.redirect_uris[0])
 
 
-def authorize_url(cfg: Config, state: str) -> str:
+def public_base(redirect_uri: str) -> str:
+    """https://clipbros.app: where Meta can fetch a reel from (same host as the redirect)."""
+    u = urlparse(redirect_uri)
+    return f"{u.scheme}://{u.netloc}"
+
+
+def authorize_url(cfg: Config, state: str, redirect_uri: str) -> str:
     return AUTH_URL + "?" + urlencode({
-        "client_id": cfg.app_id, "redirect_uri": cfg.redirect_uri, "response_type": "code",
+        "client_id": cfg.app_id, "redirect_uri": redirect_uri, "response_type": "code",
         "scope": SCOPES, "state": state})
 
 
@@ -122,10 +127,11 @@ class InstagramClient:
         async with self.http.get(f"{GRAPH}/{VERSION}/{path}", params=params) as r:
             return await self._json(r)
 
-    async def exchange_code(self, code: str) -> Token:
-        """Code -> short-lived -> long-lived user token, then the Page's Instagram account."""
+    async def exchange_code(self, code: str, redirect_uri: str) -> Token:
+        """Code -> short-lived -> long-lived user token, then the Page's Instagram account.
+        redirect_uri must be the one the login was started with, or Meta rejects the code."""
         app = {"client_id": self.cfg.app_id, "client_secret": self.cfg.app_secret}
-        short = await self._get("oauth/access_token", redirect_uri=self.cfg.redirect_uri,
+        short = await self._get("oauth/access_token", redirect_uri=redirect_uri,
                                 code=code.split("#")[0], **app)
         long = await self._get("oauth/access_token", grant_type="fb_exchange_token",
                                fb_exchange_token=short["access_token"], **app)

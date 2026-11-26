@@ -356,18 +356,24 @@ only people with a role on the app can connect, and no app review is needed for 
    product). Under App roles, Roles, give the Facebook user who manages that Page a role
    (Administrator, Developer or Tester) and have them accept the invite.
 3. Facebook Login settings, **Valid OAuth Redirect URIs**: add exactly
-   `https://clipbros.app/callback/instagram`. Keep "Client OAuth login" and "Web OAuth
+   `https://laptop.clipbros.app/callback/instagram` and `https://clipbros.app/callback/instagram`. Keep "Client OAuth login" and "Web OAuth
    login" on.
 4. Put the **Meta App ID** and **App secret** (App settings, Basic) in `.env` as
-   `INSTAGRAM_APP_ID` and `INSTAGRAM_APP_SECRET`, plus `INSTAGRAM_REDIRECT_URI`, restart
-   the app, open `/instagram` and connect. When Facebook asks which Pages and Instagram
+   `INSTAGRAM_APP_ID` and `INSTAGRAM_APP_SECRET`, plus `INSTAGRAM_REDIRECT_URIS` (the same
+   URIs, comma-separated, the first is the default), restart the app, open `/instagram` and connect. When Facebook asks which Pages and Instagram
    accounts to share, tick the Page and the Instagram account.
 
 The app asks for `instagram_basic`, `instagram_content_publish`, `pages_show_list`,
 `pages_read_engagement` and `business_management`, swaps the code for a long-lived user
 token on the server, then reads `/me/accounts` and each Page's
 `instagram_business_account` and Page access token. It keeps the first Page that has an
-Instagram account and posts with that Page token. Reconnect when the page says the login
+Instagram account and posts with that Page token.
+
+The redirect URI is picked from `INSTAGRAM_REDIRECT_URIS` by the host the page was opened on
+(`X-Forwarded-Host`, else `Host`), falling back to the first entry; a value from the request is
+never used. The chosen URI is stored with the login `state` on the server and reused for the
+code exchange, because Meta rejects a code swapped with a different redirect URI. The public
+reel link uses the same host. Reconnect when the page says the login
 has expired (about 60 days).
 
 Meta downloads the video itself, so while a reel is posted the app serves it at a random,

@@ -14,7 +14,8 @@ from clipfarm.tiktok import api as tt
 from clipfarm.tiktok.webapp import build_app
 
 TT = tt.Config("ck", "cs", "https://clipbros.test/callback")
-IG = ig.Config("app", "secret", "https://clipbros.test/callback/instagram")
+IG = ig.Config("app", "secret", ("https://clipbros.test/callback/instagram",
+                                 "https://laptop.clipbros.test/callback/instagram"))
 
 
 def fake_graph(calls, pages=({"id": "p1"}, {"id": "p2"})):
@@ -152,6 +153,53 @@ def test_connect_review_and_post_a_reel(tmp_path, monkeypatch):
     assert "Post to Instagram" not in out["clips_after"] and "On Instagram" in out["clips_after"]
 
 
+def test_redirect_uri_follows_the_host_and_is_reused_for_the_code(tmp_path, monkeypatch):
+    calls = {}
+
+    async def run():
+        g = web.AppRunner(fake_graph(calls))
+        await g.setup()
+        gs = web.TCPSite(g, "127.0.0.1", 0)
+        await gs.start()
+        monkeypatch.setattr(ig, "GRAPH", f"http://127.0.0.1:{gs._server.sockets[0].getsockname()[1]}")
+        app = build_app(TT, tmp_path / "q.db", tmp_path / "t.json", password_hash=hash_password("pw", 1000),
+                        allow_posting=True, control_dir=tmp_path / "control", ig_cfg=IG)
+        r = web.AppRunner(app)
+        await r.setup()
+        s = web.TCPSite(r, "127.0.0.1", 0)
+        await s.start()
+        base = f"http://127.0.0.1:{s._server.sockets[0].getsockname()[1]}"
+        async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True)) as c:
+            await c.post(base + "/signin", data={"password": "pw"})
+            login = await c.get(base + "/instagram/login?redirect_uri=https://evil.test/x",
+                                headers={"X-Forwarded-Host": "laptop.clipbros.test"}, allow_redirects=False)
+            q = parse_qs(urlparse(login.headers["Location"]).query)
+            # the callback comes back without the header: the stored redirect still wins
+            await c.get(f"{base}/callback/instagram?code=abc&state={q['state'][0]}")
+        await r.cleanup()
+        await g.cleanup()
+        return q["redirect_uri"][0]
+
+    sent = asyncio.run(run())
+    assert sent == calls["code"]["redirect_uri"] == "https://laptop.clipbros.test/callback/instagram"
+
+
+def test_redirect_for_only_returns_listed_uris():
+    assert IG.redirect_for("laptop.clipbros.test:443") == IG.redirect_uris[1]
+    assert IG.redirect_for("LAPTOP.clipbros.test, proxy.internal") == IG.redirect_uris[1]
+    assert IG.redirect_for("clipbros.test") == IG.redirect_uris[0]
+    assert IG.redirect_for("evil.test") == IG.redirect_uris[0] and IG.redirect_for("") == IG.redirect_uris[0]
+
+
+def test_config_reads_the_comma_separated_list(monkeypatch):
+    monkeypatch.setenv("INSTAGRAM_APP_ID", "a")
+    monkeypatch.setenv("INSTAGRAM_APP_SECRET", "s")
+    monkeypatch.setenv("INSTAGRAM_REDIRECT_URIS", " https://a.test/cb , https://b.test/cb,")
+    assert ig.Config.from_env().redirect_uris == ("https://a.test/cb", "https://b.test/cb")
+    monkeypatch.setenv("INSTAGRAM_REDIRECT_URIS", "")
+    assert ig.Config.from_env() is None
+
+
 def test_without_setup_the_page_says_what_is_missing(tmp_path):
     async def run():
         app = build_app(TT, tmp_path / "q.db", tmp_path / "t.json", password_hash=hash_password("pw", 1000),
@@ -187,7 +235,7 @@ def test_no_page_with_instagram_gives_a_clear_error(tmp_path, monkeypatch):
         monkeypatch.setattr(ig, "GRAPH", f"http://127.0.0.1:{gs._server.sockets[0].getsockname()[1]}")
         async with aiohttp.ClientSession() as http:
             try:
-                await ig.InstagramClient(IG, http).exchange_code("abc")
+                await ig.InstagramClient(IG, http).exchange_code("abc", IG.redirect_uris[0])
             except ig.InstagramError as ex:
                 return str(ex)
             finally:

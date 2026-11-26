@@ -347,7 +347,7 @@ def build_app(cfg: Config, db_path: Path, token_path: Path, password_hash: str |
     def is_public(path: str) -> bool:
         if public.match(path) or path == redirect_path:
             return True     # Meta's servers fetch the reel and Instagram calls back, both signed out
-        return bool(insta and (path == insta.redirect_path or media.match(path)))
+        return bool(insta and (path in insta.redirect_paths or media.match(path)))
 
     app = web.Application(middlewares=[auth_middleware(sessions, is_public)])
 
